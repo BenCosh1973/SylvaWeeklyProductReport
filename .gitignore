@@ -1,0 +1,7 @@
+node_modules/
+data/incoming/*.csv
+data/archive/
+data/store/
+data/manifest.json
+output/
+*.docx
