@@ -1,0 +1,1378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sylva Weekly Product Report</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/docx@9.1.1/build/index.umd.js"></script>
+<script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#020617;color:#e2e8f0;font-family:'IBM Plex Sans',sans-serif;min-height:100vh}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:#0f172a}
+::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#475569}
+.upload-zone{border:2px dashed #334155;border-radius:16px;padding:48px;text-align:center;cursor:pointer;transition:all .3s;margin:24px}
+.upload-zone:hover,.upload-zone.dragover{border-color:#60a5fa;background:#0f172a}
+.upload-zone h2{color:#f8fafc;margin-bottom:12px;font-size:22px}
+.upload-zone p{color:#64748b;font-size:14px}
+.file-list{margin:16px 24px;display:flex;flex-wrap:wrap;gap:8px}
+.file-chip{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:6px 12px;font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px}
+.file-chip .type{color:#60a5fa;font-weight:600}
+.file-chip .remove{cursor:pointer;color:#64748b;margin-left:4px}
+.file-chip .remove:hover{color:#f87171}
+.btn{padding:10px 24px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s}
+.btn-primary{background:#3b82f6;color:#fff}.btn-primary:hover{background:#2563eb}
+.btn-secondary{background:#1e293b;color:#94a3b8;border:1px solid #334155}.btn-secondary:hover{background:#334155}
+.btn-success{background:#059669;color:#fff}.btn-success:hover{background:#047857}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.controls{display:flex;gap:12px;align-items:center;margin:16px 24px;flex-wrap:wrap}
+.week-input{background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:8px 12px;border-radius:8px;font-size:14px;font-family:inherit}
+.status-bar{background:#0f172a;border-top:1px solid #1e293b;padding:8px 24px;font-size:12px;color:#64748b;position:fixed;bottom:0;left:0;right:0;z-index:100}
+.status-bar .success{color:#34d399}.status-bar .error{color:#f87171}
+.history-panel{background:#0f172a;border:1px solid #1e293b;border-radius:12px;margin:16px 24px;padding:16px;max-height:200px;overflow-y:auto}
+.history-item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:6px;cursor:pointer;font-size:13px}
+.history-item:hover{background:#1e293b}
+.history-item .week{color:#e2e8f0;font-weight:500}.history-item .date{color:#64748b}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+/* ═══════════════════════════════════════════════
+   UTILITY FUNCTIONS
+   ═══════════════════════════════════════════════ */
+
+function parseCSV(text) {
+  const lines = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (inQuotes && text[i + 1] === '"') { current += '"'; i++; }
+      else { inQuotes = !inQuotes; }
+    } else if (ch === ',' && !inQuotes) {
+      lines.push(current); current = '';
+    } else if ((ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) && !inQuotes) {
+      lines.push(current); current = '';
+      if (ch === '\r') i++;
+      if (lines.length > 0) { yield lines.splice(0); }
+    } else { current += ch; }
+  }
+  if (current || lines.length) { lines.push(current); yield lines.splice(0); }
+}
+
+function* csvRowGenerator(text) {
+  let headerRow = null;
+  for (const fields of parseCSV(text)) {
+    if (!headerRow) { headerRow = fields.map(h => h.trim()); continue; }
+    if (fields.length === 0 || (fields.length === 1 && fields[0].trim() === '')) continue;
+    const obj = {};
+    for (let i = 0; i < headerRow.length; i++) {
+      obj[headerRow[i]] = (fields[i] || '').trim();
+    }
+    yield obj;
+  }
+}
+
+function readCSVText(text) {
+  // Simpler non-generator approach for compatibility
+  const rows = [];
+  const lines = text.split(/\r?\n/);
+  if (lines.length === 0) return [];
+
+  // Parse header
+  const headers = parseCSVLine(lines[0]);
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
+    const fields = parseCSVLine(lines[i]);
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      obj[headers[j].trim()] = (fields[j] || '').trim();
+    }
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function parseCSVLine(line) {
+  const fields = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else { inQuotes = !inQuotes; }
+    } else if (ch === ',' && !inQuotes) {
+      fields.push(current); current = '';
+    } else { current += ch; }
+  }
+  fields.push(current);
+  return fields;
+}
+
+function num(val) {
+  if (val === null || val === undefined || val === '' || val === 'NaN') return null;
+  const n = parseFloat(val);
+  return isNaN(n) ? null : n;
+}
+
+function median(arr) {
+  const valid = arr.filter(v => v !== null && v !== undefined).sort((a, b) => a - b);
+  if (valid.length === 0) return null;
+  const mid = Math.floor(valid.length / 2);
+  return valid.length % 2 !== 0 ? valid[mid] : (valid[mid - 1] + valid[mid]) / 2;
+}
+
+function mean(arr) {
+  const valid = arr.filter(v => v !== null && v !== undefined);
+  if (valid.length === 0) return null;
+  return valid.reduce((s, v) => s + v, 0) / valid.length;
+}
+
+function mode(arr) {
+  const valid = arr.filter(v => v && v !== 'NaN');
+  if (valid.length === 0) return null;
+  const counts = {};
+  for (const v of valid) counts[v] = (counts[v] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function round(val, n = 1) {
+  if (val === null || val === undefined) return null;
+  return Math.round(val * 10 ** n) / 10 ** n;
+}
+
+function getTopN(arr, n) {
+  const counts = {};
+  for (const v of arr) if (v && v !== 'NaN') counts[v] = (counts[v] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n).map(([value, count]) => ({ value, count }));
+}
+
+function getDistribution(arr) {
+  const counts = {};
+  for (const v of arr) if (v && v !== 'NaN') counts[v] = (counts[v] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([value, count]) => ({ value, count }));
+}
+
+function currentWeekLabel() {
+  const d = new Date();
+  const jan4 = new Date(d.getFullYear(), 0, 4);
+  const dayOfYear = Math.floor((d - new Date(d.getFullYear(), 0, 1)) / 86400000);
+  const weekNum = Math.ceil((dayOfYear + jan4.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+/* ═══════════════════════════════════════════════
+   CSV CLASSIFIER
+   ═══════════════════════════════════════════════ */
+
+function classifyCSV(fileName, headers, rows) {
+  const norm = h => h.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const normHeaders = headers.map(norm);
+  const has = (...cols) => cols.every(c => normHeaders.includes(norm(c)));
+
+  if (has('User ID', 'Timestamp', 'Subscription status')) {
+    return { type: 'chatDigest', confidence: 'high', rowCount: rows.length };
+  }
+  if (has('sessionid', 'eventname', 'trackedon', 'uxcamuserid')) {
+    return { type: 'uxcamEvent', confidence: 'high' };
+  }
+  if (has('sessionid', 'uxcamuserid', 'totalsessiontime', 'recordedon')) {
+    return { type: 'uxcamSession', confidence: 'high' };
+  }
+  if (has('uxcamuserid', 'totalsession', 'totalsessiontime')) {
+    return { type: 'uxcamUser', confidence: 'high' };
+  }
+  if (has('totalsession', 'screen_name')) {
+    return { type: 'uxcamScreen', confidence: 'high' };
+  }
+  if (has('Cohort', 'Subscriptions')) {
+    return { type: 'revenuecatRetention', confidence: 'high' };
+  }
+  if (has('Project')) {
+    const hasTriples = headers.filter(h => /^Total(\.\d)?$/.test(h)).length >= 3;
+    const hasSylvaTriples = headers.filter(h => /^Sylva(\.\d)?$/.test(h)).length >= 3;
+    if (hasTriples || hasSylvaTriples) {
+      if (rows.length > 0) {
+        const vals = Object.values(rows[0]);
+        if (vals.some(v => typeof v === 'string' && v.includes('%'))) return { type: 'revenuecatConversion', confidence: 'medium' };
+        if (vals.some(v => typeof v === 'string' && (v.includes('$') || v.includes('£') || v.includes('€') || /^\d+\.\d{2}$/.test(v)))) return { type: 'revenuecatMRR', confidence: 'medium' };
+        return { type: 'revenuecatNewCustomers', confidence: 'medium' };
+      }
+    }
+    if (normHeaders.includes('total') && normHeaders.includes('sylva')) {
+      if (rows.length > 0) {
+        const vals = Object.values(rows[0]);
+        if (vals.some(v => typeof v === 'string' && (v.includes('$') || v.includes('£') || v.includes('€')))) return { type: 'revenuecatMRR', confidence: 'medium' };
+        return { type: 'revenuecatActiveSubscriptions', confidence: 'medium' };
+      }
+    }
+  }
+  return { type: 'unknown', confidence: 'none' };
+}
+
+const DATA_TYPE_LABELS = {
+  chatDigest: 'Chat Digest',
+  uxcamEvent: 'UXCam Events',
+  uxcamUser: 'UXCam Users',
+  uxcamSession: 'UXCam Sessions',
+  uxcamScreen: 'UXCam Screens',
+  revenuecatConversion: 'RevenueCat Conversion',
+  revenuecatRetention: 'RevenueCat Retention',
+  revenuecatActiveSubscriptions: 'RevenueCat Active Subs',
+  revenuecatMRR: 'RevenueCat MRR',
+  revenuecatNewCustomers: 'RevenueCat New Customers',
+  unknown: 'Unknown',
+};
+
+/* ═══════════════════════════════════════════════
+   CHAT DIGEST ANALYSIS (Steps 2-4)
+   ═══════════════════════════════════════════════ */
+
+function buildUserProfile(userId, rows, today) {
+  const timestamps = rows.map(r => new Date(r['Timestamp'])).filter(d => !isNaN(d)).sort((a, b) => a - b);
+  const firstChat = timestamps[0] || null;
+  const lastChat = timestamps[timestamps.length - 1] || null;
+  const daysActive = firstChat && lastChat ? Math.max(1, Math.round((lastChat - firstChat) / 86400000)) : 0;
+
+  const trialStartRaw = rows.find(r => r['Trial Start Date'])?.['Trial Start Date'];
+  const trialStartDate = trialStartRaw ? new Date(trialStartRaw) : null;
+  const daysSinceTrialStart = trialStartDate ? Math.round((today - trialStartDate) / 86400000) : null;
+
+  const subStartRaw = rows.find(r => r['Subscription Start Date'])?.['Subscription Start Date'];
+  const subscriptionStartDate = subStartRaw ? new Date(subStartRaw) : null;
+  const daysTrialToSubscription = trialStartDate && subscriptionStartDate ? Math.round((subscriptionStartDate - trialStartDate) / 86400000) : null;
+
+  const csatValues = rows.map(r => num(r['CSAT'])).filter(v => v !== null);
+  const msgCounts = rows.map(r => num(r['Message Count'])).filter(v => v !== null);
+  const durations = rows.map(r => num(r['Duration (min)'])).filter(v => v !== null);
+  const testsCompleted = rows.map(r => num(r['Tests Completed Count'])).filter(v => v !== null);
+  const topics = [...new Set(rows.map(r => r['Topic']).filter(t => t && t !== 'NaN'))];
+  const strategies = [...new Set(rows.map(r => r['Strategies']).filter(s => s && s !== 'NaN' && s !== 'Insufficient conversation data'))];
+  const pss10Before = rows.map(r => num(r['PSS10 Before'])).filter(v => v !== null);
+  const pss10After = rows.map(r => num(r['PSS10 After'])).filter(v => v !== null);
+  const pss10BaselineBefore = pss10Before.length > 0 ? pss10Before[0] : null;
+  const pss10Current = pss10After.length > 0 ? pss10After[pss10After.length - 1] : null;
+  const pss10Change = pss10BaselineBefore !== null && pss10Current !== null ? round(pss10Current - pss10BaselineBefore, 1) : null;
+  const emotionsBefore = rows.map(r => r['Emotions Before']).filter(e => e && e !== 'NaN');
+  const emotionsAfter = rows.map(r => r['Emotions After']).filter(e => e && e !== 'NaN');
+  const reliefVelocity = rows.map(r => r['Relief Velocity']).filter(v => v && v !== 'NaN');
+  const testNames = rows.map(r => r['Tests Completed Names']).filter(t => t && t !== 'NaN').pop() || null;
+
+  return {
+    userId, subscriptionStatus: rows[0]['Subscription status'] || 'NaN',
+    totalSessions: rows.length, firstChat, lastChat, daysActive,
+    trialStartDate, daysSinceTrialStart, subscriptionStartDate, daysTrialToSubscription,
+    meanCSAT: round(mean(csatValues), 1), meanMessageCount: round(mean(msgCounts), 1),
+    meanDuration: round(mean(durations), 1), totalMessages: msgCounts.reduce((s, v) => s + v, 0),
+    topics, testsCompletedCount: testsCompleted.length > 0 ? Math.max(...testsCompleted) : 0,
+    testsCompletedNames: testNames, pss10Before: pss10BaselineBefore, pss10After: pss10Current,
+    pss10Change, emotionsBeforeMostCommon: mode(emotionsBefore), emotionsAfterMostCommon: mode(emotionsAfter),
+    reliefVelocityMostCommon: mode(reliefVelocity), strategies,
+  };
+}
+
+function segmentTrialUser(profile, today) {
+  const hoursSinceLastChat = profile.lastChat ? (today - profile.lastChat) / 3600000 : Infinity;
+  const trialExpired = profile.daysSinceTrialStart !== null && profile.daysSinceTrialStart > 7;
+  if (trialExpired) return 'expired_lapsed';
+  if (hoursSinceLastChat <= 48) return 'active_trial';
+  if (profile.totalSessions >= 5 && profile.daysActive >= 3) return 'high_engagement_no_convert';
+  if (profile.totalSessions >= 2 && profile.totalSessions <= 4) return 'moderate_fading';
+  if (profile.totalSessions === 1) return 'single_session';
+  return 'other';
+}
+
+function analyzeChatDigest(rows, today = new Date()) {
+  if (!rows || rows.length === 0) return { error: 'No chat digest data' };
+  const userRows = {};
+  for (const row of rows) {
+    const uid = row['User ID'];
+    if (!uid) continue;
+    if (!userRows[uid]) userRows[uid] = [];
+    userRows[uid].push(row);
+  }
+  const allProfiles = {};
+  for (const [uid, uRows] of Object.entries(userRows)) allProfiles[uid] = buildUserProfile(uid, uRows, today);
+
+  const byStatus = { trial: [], active: [], free: [], cancelled: [], unknown: [] };
+  for (const p of Object.values(allProfiles)) {
+    const s = (p.subscriptionStatus || '').toLowerCase().trim();
+    (byStatus[s] || byStatus.unknown).push(p);
+  }
+
+  const trialSegments = { high_engagement_no_convert: [], moderate_fading: [], single_session: [], active_trial: [], expired_lapsed: [], other: [] };
+  for (const p of byStatus.trial) { p.segment = segmentTrialUser(p, today); trialSegments[p.segment].push(p); }
+
+  const computeGroupMetrics = (profiles) => ({
+    count: profiles.length,
+    medianSessions: median(profiles.map(p => p.totalSessions)),
+    medianMessagesPerSession: median(profiles.map(p => p.meanMessageCount)),
+    medianDuration: median(profiles.map(p => p.meanDuration)),
+    medianCSAT: median(profiles.map(p => p.meanCSAT).filter(v => v !== null)),
+    medianTestsCompleted: median(profiles.map(p => p.testsCompletedCount)),
+    medianPSS10Change: median(profiles.map(p => p.pss10Change).filter(v => v !== null)),
+    meanPSS10Before: round(mean(profiles.map(p => p.pss10Before).filter(v => v !== null)), 1),
+    meanPSS10After: round(mean(profiles.map(p => p.pss10After).filter(v => v !== null)), 1),
+    medianDaysActive: median(profiles.map(p => p.daysActive)),
+    topTopics: getTopN(profiles.flatMap(p => p.topics), 10),
+    topStrategies: getTopN(profiles.flatMap(p => p.strategies), 5),
+    emotionsBeforeDistribution: getDistribution(profiles.map(p => p.emotionsBeforeMostCommon)),
+    emotionsAfterDistribution: getDistribution(profiles.map(p => p.emotionsAfterMostCommon)),
+    reliefVelocityDistribution: getDistribution(profiles.map(p => p.reliefVelocityMostCommon)),
+  });
+
+  const trialMetrics = computeGroupMetrics(byStatus.trial);
+  const paidMetrics = computeGroupMetrics(byStatus.active);
+  const cancelledMetrics = computeGroupMetrics(byStatus.cancelled);
+
+  const daysToConvert = byStatus.active.map(p => p.daysTrialToSubscription).filter(v => v !== null);
+
+  const engagementGaps = {
+    messagesPerSession: { trial: trialMetrics.medianMessagesPerSession, paid: paidMetrics.medianMessagesPerSession, ratio: paidMetrics.medianMessagesPerSession && trialMetrics.medianMessagesPerSession ? round(paidMetrics.medianMessagesPerSession / trialMetrics.medianMessagesPerSession, 1) : null },
+    duration: { trial: trialMetrics.medianDuration, paid: paidMetrics.medianDuration, ratio: paidMetrics.medianDuration && trialMetrics.medianDuration ? round(paidMetrics.medianDuration / trialMetrics.medianDuration, 1) : null },
+    testsCompleted: { trial: trialMetrics.medianTestsCompleted, paid: paidMetrics.medianTestsCompleted, ratio: paidMetrics.medianTestsCompleted && trialMetrics.medianTestsCompleted ? round(paidMetrics.medianTestsCompleted / trialMetrics.medianTestsCompleted, 1) : null },
+    csat: { trial: trialMetrics.medianCSAT, paid: paidMetrics.medianCSAT },
+    sessions: { trial: trialMetrics.medianSessions, paid: paidMetrics.medianSessions },
+    pss10Change: { trial: trialMetrics.medianPSS10Change, paid: paidMetrics.medianPSS10Change },
+  };
+
+  const gaps = [
+    { metric: 'Tests Completed', ratio: engagementGaps.testsCompleted.ratio },
+    { metric: 'Session Duration', ratio: engagementGaps.duration.ratio },
+    { metric: 'Messages/Session', ratio: engagementGaps.messagesPerSession.ratio },
+    { metric: 'Total Sessions', ratio: engagementGaps.sessions.paid && engagementGaps.sessions.trial ? round(engagementGaps.sessions.paid / engagementGaps.sessions.trial, 1) : null },
+  ].filter(g => g.ratio !== null).sort((a, b) => (b.ratio || 0) - (a.ratio || 0));
+
+  return {
+    totalRows: rows.length, totalUsers: Object.keys(allProfiles).length,
+    statusCounts: { trial: byStatus.trial.length, active: byStatus.active.length, free: byStatus.free.length, cancelled: byStatus.cancelled.length, unknown: byStatus.unknown.length },
+    trialProfiles: byStatus.trial, paidProfiles: byStatus.active, cancelledProfiles: byStatus.cancelled,
+    trialSegments: { high_engagement_no_convert: trialSegments.high_engagement_no_convert.length, moderate_fading: trialSegments.moderate_fading.length, single_session: trialSegments.single_session.length, active_trial: trialSegments.active_trial.length, expired_lapsed: trialSegments.expired_lapsed.length },
+    trialMetrics, paidMetrics, cancelledMetrics, engagementGaps,
+    strongestPredictor: gaps[0] || null, medianDaysToConvert: median(daysToConvert),
+  };
+}
+
+/* ═══════════════════════════════════════════════
+   UXCAM ANALYSIS (Steps 5-6)
+   ═══════════════════════════════════════════════ */
+
+function parseProperty(propStr) {
+  if (!propStr || propStr === 'NaN' || propStr === '{}') return {};
+  try {
+    let json = propStr.replace(/'/g, '"').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
+    return JSON.parse(json);
+  } catch { return {}; }
+}
+
+function analyzeUXCamEvents(rows) {
+  if (!rows || rows.length === 0) return { error: 'No UXCam event data' };
+  const FUNNEL_EVENTS = ['trial_start','subscription_pricing_viewed','subscription_plan_selected','subscription_purchase_started','subscription_payment_viewed','subscription_completed','subscription_started','chat_trial_start_modal_visible'];
+  const eventsByName = {};
+  for (const row of rows) {
+    const eventName = row['eventname'] || row['event_name'];
+    const userId = row['uxcamuserid'];
+    const props = parseProperty(row['property']);
+    if (!eventsByName[eventName]) eventsByName[eventName] = [];
+    eventsByName[eventName].push({ eventName, userId, props, trackedOn: row['trackedon'], screenName: row['screen_name'] });
+  }
+
+  const funnel = {};
+  for (const en of FUNNEL_EVENTS) {
+    const events = eventsByName[en] || [];
+    const uniqueUsers = new Set(events.map(e => e.userId));
+    funnel[en] = { totalEvents: events.length, uniqueUsers: uniqueUsers.size, userIds: [...uniqueUsers] };
+  }
+
+  const funnelSteps = ['trial_start','subscription_pricing_viewed','subscription_plan_selected','subscription_purchase_started','subscription_payment_viewed','subscription_completed'];
+  const subscriptionFunnel = funnelSteps.map((step, i) => {
+    const data = funnel[step] || { totalEvents: 0, uniqueUsers: 0, userIds: [] };
+    const prevUsers = i > 0 ? (funnel[funnelSteps[i - 1]]?.uniqueUsers || 0) : data.uniqueUsers;
+    return { step, ...data, dropRate: prevUsers > 0 ? round((1 - data.uniqueUsers / prevUsers) * 100, 1) : null, dropFromPrevious: prevUsers > 0 ? prevUsers - data.uniqueUsers : 0 };
+  });
+
+  const fromPageAnalysis = {};
+  for (const en of ['subscription_pricing_viewed','subscription_plan_selected','subscription_purchase_started']) {
+    const events = eventsByName[en] || [];
+    const fromPages = {};
+    for (const e of events) { const fp = e.props.from_page || e.props.fromPage || 'unknown'; fromPages[fp] = (fromPages[fp] || 0) + 1; }
+    fromPageAnalysis[en] = fromPages;
+  }
+
+  const trialModals = eventsByName['chat_trial_start_modal_visible'] || [];
+  const modalContexts = {};
+  for (const e of trialModals) { const key = `${e.props.chatbot || 'unknown'}/${e.props.modal_type || 'unknown'}`; modalContexts[key] = (modalContexts[key] || 0) + 1; }
+
+  return { totalEvents: rows.length, uniqueEventNames: Object.keys(eventsByName), subscriptionFunnel, funnelRaw: funnel, fromPageAnalysis, trialModalContexts: modalContexts, chatTrialStartModalCount: trialModals.length };
+}
+
+function analyzeUXCamUsers(rows) {
+  if (!rows || rows.length === 0) return { error: 'No UXCam user data' };
+  const byStatus = { paid: [], trial_started: [], cancelled: [], none: [] };
+  for (const row of rows) {
+    const status = (row['u__subscriptionstatus'] || row['u__subscription_status'] || '').toLowerCase().trim();
+    (byStatus[status] || byStatus.none).push(row);
+  }
+  const summarize = (g) => ({ count: g.length, medianTotalSessions: median(g.map(r => num(r['totalsession']))), medianTotalSessionTime: median(g.map(r => num(r['totalsessiontime']))), userIds: g.map(r => r['uxcamuserid']) });
+  return { totalUsers: rows.length, statusCounts: { paid: byStatus.paid.length, trial_started: byStatus.trial_started.length, cancelled: byStatus.cancelled.length, none: byStatus.none.length }, paidUsers: summarize(byStatus.paid), trialUsers: summarize(byStatus.trial_started) };
+}
+
+function analyzeUXCamSessions(rows) {
+  if (!rows || rows.length === 0) return { error: 'No UXCam session data' };
+  return { totalSessions: rows.length, medianSessionTime: median(rows.map(r => num(r['totalsessiontime']))), sessionsWithRageGestures: rows.filter(r => num(r['ragegesturecount']) > 0).length, totalRageGestures: rows.reduce((s, r) => s + (num(r['ragegesturecount']) || 0), 0) };
+}
+
+function analyzeUXCamScreens(rows) {
+  if (!rows || rows.length === 0) return { error: 'No UXCam screen data' };
+  const TARGET_SCREENS = ['/subscribe', '/trial-start', '/chat', '/settings'];
+  const screenMetrics = {};
+  for (const row of rows) {
+    const sn = (row['screen_name'] || '').trim();
+    for (const target of TARGET_SCREENS) {
+      if (sn.toLowerCase().includes(target.replace('/', ''))) {
+        screenMetrics[target] = { screenName: sn, totalSessions: num(row['totalsession']), totalBounce: num(row['totalbounce']), medianEngagementTime: num(row['totalengagementtimemedian']), bounceRate: num(row['totalsession']) > 0 ? round((num(row['totalbounce']) || 0) / num(row['totalsession']) * 100, 1) : null };
+      }
+    }
+  }
+  return { totalScreens: rows.length, targetScreens: screenMetrics };
+}
+
+/* ═══════════════════════════════════════════════
+   REVENUECAT ANALYSIS (Step 7)
+   ═══════════════════════════════════════════════ */
+
+function analyzeConversion(rows) {
+  if (!rows || rows.length === 0) return { error: 'No conversion data' };
+  const result = [];
+  for (const row of rows) {
+    const entry = { period: row['Project'] || row[Object.keys(row)[0]] };
+    const keys = Object.keys(row);
+    for (const prefix of ['Total', 'Sylva', 'Rowan', 'Hazel']) {
+      const cols = keys.filter(k => k === prefix || k.startsWith(prefix + '.'));
+      if (cols.length >= 3) {
+        const rateStr = row[cols[2]];
+        entry[prefix.toLowerCase()] = { newCustomers: num(row[cols[0]]), paying: num(row[cols[1]]), conversionRate: rateStr?.replace('%', ''), conversionRateNum: rateStr ? num(rateStr.replace('%', '')) : null };
+      }
+    }
+    result.push(entry);
+  }
+  const latest = result.length > 0 ? (result[result.length - 1].sylva || result[result.length - 1].total) : null;
+  return { periods: result, latestConversionRate: latest?.conversionRateNum || null, latestNewCustomers: latest?.newCustomers || null, latestPaying: latest?.paying || null };
+}
+
+function analyzeRetention(rows) {
+  if (!rows || rows.length === 0) return { error: 'No retention data' };
+  const cohorts = [];
+  let totalSubscriptions = 0;
+  const monthSurvival = {};
+  for (const row of rows) {
+    const cohort = { name: row['Cohort'], subscriptions: num(row['Subscriptions']), months: {} };
+    for (let m = 1; m <= 12; m++) {
+      const val = row[`Month ${m}`];
+      if (val !== undefined && val !== '' && val !== 'NaN') {
+        const nv = num(val);
+        cohort.months[m] = nv;
+        if (!monthSurvival[m]) monthSurvival[m] = { surviving: 0, total: 0 };
+        monthSurvival[m].surviving += nv || 0;
+        monthSurvival[m].total += cohort.subscriptions || 0;
+      }
+    }
+    totalSubscriptions += cohort.subscriptions || 0;
+    cohorts.push(cohort);
+  }
+  const survivalCurve = {};
+  for (const [month, data] of Object.entries(monthSurvival)) {
+    survivalCurve[month] = { surviving: data.surviving, total: data.total, rate: data.total > 0 ? round(data.surviving / data.total * 100, 1) : null };
+  }
+  return { totalCohorts: cohorts.length, totalSubscriptions, cohorts, survivalCurve, month1Retention: survivalCurve[1]?.rate || null, month3Retention: survivalCurve[3]?.rate || null, month6Retention: survivalCurve[6]?.rate || null, month12Retention: survivalCurve[12]?.rate || null };
+}
+
+function analyzeActiveSubscriptions(rows) {
+  if (!rows || rows.length === 0) return { error: 'No active subscriptions data' };
+  const latest = rows[rows.length - 1];
+  const trend = rows.map(r => ({ date: r['Project'] || r[Object.keys(r)[0]], total: num(r['Total']), sylva: num(r['Sylva']), rowan: num(r['Rowan']), hazel: num(r['Hazel']) }));
+  return { latest: { total: num(latest['Total']), sylva: num(latest['Sylva']), rowan: num(latest['Rowan']), hazel: num(latest['Hazel']) }, trend, dataPoints: rows.length };
+}
+
+function analyzeMRR(rows) {
+  if (!rows || rows.length === 0) return { error: 'No MRR data' };
+  const latest = rows[rows.length - 1];
+  return { latest: { total: num(latest['Total']), sylva: num(latest['Sylva']) }, trend: rows.map(r => ({ date: r['Project'] || r[Object.keys(r)[0]], total: num(r['Total']), sylva: num(r['Sylva']) })), dataPoints: rows.length };
+}
+
+function analyzeNewCustomers(rows) {
+  if (!rows || rows.length === 0) return { error: 'No new customers data' };
+  const latest = rows[rows.length - 1];
+  const trend = rows.map(r => ({ date: r['Project'] || r[Object.keys(r)[0]], total: num(r['Total']), sylva: num(r['Sylva']) }));
+  return { latest: { total: num(latest['Total']), sylva: num(latest['Sylva']) }, trend, dataPoints: rows.length, totalAllTime: trend.reduce((s, t) => s + (t.sylva || 0), 0) };
+}
+
+const BENCHMARKS = { trialToPaid: { sylva: 2.5, hfMedian: 39.9, hfTop10: 68.3 }, month1Retention: { sylva: 52 }, trialLengthBenchmark: { optimal: '17-32 days', conversionRate: 45.7 } };
+
+/* ═══════════════════════════════════════════════
+   BLOCKER IDENTIFICATION & ACTIONS (Step 9)
+   ═══════════════════════════════════════════════ */
+
+function identifyBlockers(chatAnalysis, uxcamEvents, uxcamScreens) {
+  const blockers = { valueDelivery: [], valueAwareness: [], pricingTiming: [], trialExpiration: [] };
+  const totalTrialUsers = chatAnalysis.statusCounts?.trial || 0;
+
+  const singleSessionUsers = chatAnalysis.trialSegments?.single_session || 0;
+  if (singleSessionUsers > 0) blockers.valueDelivery.push({ finding: `${singleSessionUsers} trial users (${totalTrialUsers > 0 ? round(singleSessionUsers / totalTrialUsers * 100, 0) : 0}%) had only 1 chat session`, implication: 'First session didn\'t deliver enough value to bring them back', severity: 'high' });
+
+  const trialMsg = chatAnalysis.engagementGaps?.messagesPerSession?.trial;
+  const paidMsg = chatAnalysis.engagementGaps?.messagesPerSession?.paid;
+  if (trialMsg && paidMsg && trialMsg < paidMsg) blockers.valueDelivery.push({ finding: `Trial users send ${trialMsg} messages/session vs ${paidMsg} for paid (${round(paidMsg / trialMsg, 1)}x gap)`, implication: 'Shallow engagement — trial users aren\'t going deep enough', severity: 'medium' });
+
+  const trialTests = chatAnalysis.engagementGaps?.testsCompleted?.trial;
+  const paidTests = chatAnalysis.engagementGaps?.testsCompleted?.paid;
+  if (trialTests !== null && paidTests !== null && paidTests !== undefined && trialTests < paidTests) {
+    blockers.valueDelivery.push({ finding: `Trial users complete ${trialTests} tests vs ${paidTests} for paid (${round(paidTests / (trialTests || 1), 0)}x gap)`, implication: 'Test completion appears to be the strongest conversion predictor', severity: 'critical' });
+  }
+
+  if (uxcamEvents && !uxcamEvents.error) {
+    const trialStarts = uxcamEvents.funnelRaw?.trial_start?.uniqueUsers || 0;
+    const pricingViewed = uxcamEvents.funnelRaw?.subscription_pricing_viewed?.uniqueUsers || 0;
+    if (trialStarts > 0 && pricingViewed < trialStarts * 0.2) blockers.valueAwareness.push({ finding: `Only ${pricingViewed} of ${trialStarts} trial users viewed pricing (${round(pricingViewed / trialStarts * 100, 1)}%)`, implication: 'Most trial users never see the subscription offer', severity: 'critical' });
+
+    const fromPages = uxcamEvents.fromPageAnalysis?.subscription_pricing_viewed || {};
+    const totalFP = Object.values(fromPages).reduce((s, v) => s + v, 0);
+    if (totalFP > 0) {
+      const dom = Object.entries(fromPages).sort((a, b) => b[1] - a[1])[0];
+      if (dom && dom[1] / totalFP > 0.7) blockers.valueAwareness.push({ finding: `${round(dom[1] / totalFP * 100, 0)}% of pricing views come from '${dom[0]}'`, implication: 'Paywall triggered from only one context', severity: 'medium' });
+    }
+
+    if (uxcamEvents.chatTrialStartModalCount > 0) blockers.pricingTiming.push({ finding: `${uxcamEvents.chatTrialStartModalCount} trial limit modal displays during active chats`, implication: 'Users hit the paywall during engagement — timing may feel punitive', severity: 'medium' });
+  }
+
+  if (uxcamScreens && !uxcamScreens.error) {
+    const ss = uxcamScreens.targetScreens?.['/subscribe'];
+    if (ss && ss.totalSessions < 20) blockers.valueAwareness.push({ finding: `Only ${ss.totalSessions} sessions on /subscribe screen`, implication: 'Users rarely reach the subscription page', severity: 'high' });
+  }
+
+  blockers.pricingTiming.push({ finding: '7-day trial may be too short for parenting crisis cycle', implication: 'Benchmark: 17-32 day trials convert at 45.7% (RevenueCat 2025)', severity: 'medium' });
+
+  const expiredUsers = chatAnalysis.trialSegments?.expired_lapsed || 0;
+  if (expiredUsers > 0) blockers.trialExpiration.push({ finding: `${expiredUsers} users have expired/lapsed trials`, implication: 'Trial ended before these users were ready to decide', severity: 'high' });
+  const fadingUsers = chatAnalysis.trialSegments?.moderate_fading || 0;
+  if (fadingUsers > 0) blockers.trialExpiration.push({ finding: `${fadingUsers} trial users are fading (2-4 sessions, inactive >3 days)`, implication: 'Re-engagement opportunity', severity: 'medium' });
+
+  return blockers;
+}
+
+function generateActions(blockers, chatAnalysis, uxcamEvents) {
+  const actions = [];
+  const testGap = chatAnalysis.engagementGaps?.testsCompleted;
+  if (testGap && testGap.ratio && testGap.ratio > 2) {
+    actions.push({ priority: 'P0', what: 'Drive test completion during trial: guide users to complete 3+ tests in first 3 sessions', why: `Test completion is the strongest conversion predictor (${testGap.trial} vs ${testGap.paid} for paid, ${testGap.ratio}x gap)`, who: 'Joe (product/engineering)', when: 'This sprint', expectedImpact: 'If 10% of trial users complete 3+ tests, expect additional conversions based on paid user patterns' });
+  }
+  if (blockers.valueAwareness.length > 0) {
+    actions.push({ priority: 'P0', what: 'Add subscription prompts after value moments (post-test results, PSS10 improvement, high-CSAT sessions)', why: blockers.valueAwareness.map(b => b.finding).join('. '), who: 'Joe (product/engineering)', when: 'This sprint', expectedImpact: 'Increasing pricing view rate to 30%+ of trial users could double conversion opportunities' });
+  }
+  const fadingCount = chatAnalysis.trialSegments?.moderate_fading || 0;
+  const singleCount = chatAnalysis.trialSegments?.single_session || 0;
+  if (fadingCount > 0 || singleCount > 0) {
+    actions.push({ priority: 'P1', what: 'Implement re-engagement nudges: push notifications on days 2, 4, 6 of trial', why: `${fadingCount} fading users and ${singleCount} single-session users represent lost conversion opportunities`, who: 'Joe + Ronan (marketing)', when: 'Next 2-4 sprints', expectedImpact: `Re-engaging ${Math.round((fadingCount + singleCount) * 0.2)} of ${fadingCount + singleCount} disengaged users could yield 1-3 additional conversions` });
+  }
+  actions.push({ priority: 'P1', what: 'Test extended trial length (14 or 21 days)', why: '7-day trial may not match parenting crisis cycles. RevenueCat 2025: 17-32 day trials convert at 45.7%', who: 'Joe (product/engineering)', when: 'Next sprint (A/B test)', expectedImpact: 'Extended trials in H&F category convert at 45.7% vs current ~2.5%' });
+  actions.push({ priority: 'P2', what: 'Build trial-end nurture sequence with contextual prompts at days 5, 6, 7', why: `${chatAnalysis.trialSegments?.expired_lapsed || 0} expired trials suggest users aren't receiving timely conversion prompts`, who: 'Ronan (marketing) + Joe', when: 'Next 2-4 sprints', expectedImpact: 'Industry standard: well-timed trial-end sequences increase conversion by 15-25%' });
+  return actions.slice(0, 5);
+}
+
+/* ═══════════════════════════════════════════════
+   SANITY CHECKS (Step 12)
+   ═══════════════════════════════════════════════ */
+
+function runSanityChecks(chat, uxEvents, uxUsers, retention, conversion, activeSubs) {
+  const checks = [];
+  if (chat && uxEvents && !uxEvents.error) {
+    const ct = chat.statusCounts?.trial || 0, ut = uxEvents.funnelRaw?.trial_start?.uniqueUsers || 0;
+    checks.push({ name: 'Trial user count match (Chat vs UXCam)', passed: ct > 0 && ut > 0 ? Math.abs(ct - ut) / Math.max(ct, ut) < 0.5 : null, detail: `Chat: ${ct}, UXCam: ${ut}`, note: 'May differ due to date ranges' });
+  }
+  if (chat && activeSubs && !activeSubs.error) {
+    const cp = chat.statusCounts?.active || 0, ra = activeSubs.latest?.sylva || 0;
+    checks.push({ name: 'Paid user count match (Chat vs RevenueCat)', passed: Math.abs(cp - ra) <= 5, detail: `Chat: ${cp}, RevenueCat: ${ra}` });
+  }
+  if (uxEvents && !uxEvents.error && uxEvents.subscriptionFunnel) {
+    let consistent = true;
+    for (let i = 1; i < uxEvents.subscriptionFunnel.length; i++) { if (uxEvents.subscriptionFunnel[i].uniqueUsers > uxEvents.subscriptionFunnel[i - 1].uniqueUsers) { consistent = false; break; } }
+    checks.push({ name: 'Subscription funnel consistency', passed: consistent, detail: uxEvents.subscriptionFunnel.map(s => `${s.step}: ${s.uniqueUsers}`).join(' → ') });
+  }
+  if (chat) {
+    const allPSS = [chat.trialMetrics?.meanPSS10Before, chat.trialMetrics?.meanPSS10After, chat.paidMetrics?.meanPSS10Before, chat.paidMetrics?.meanPSS10After].filter(v => v !== null && v !== undefined);
+    checks.push({ name: 'PSS10 scores plausible (0-40)', passed: allPSS.every(v => v >= 0 && v <= 40), detail: `Values: ${allPSS.map(v => round(v, 1)).join(', ')}` });
+  }
+  return checks;
+}
+
+/* ═══════════════════════════════════════════════
+   INDEXEDDB STORAGE
+   ═══════════════════════════════════════════════ */
+
+const DB_NAME = 'SylvaWeeklyReport';
+const DB_VERSION = 1;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('weeks')) db.createObjectStore('weeks', { keyPath: 'weekLabel' });
+      if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveWeekData(weekLabel, analysis) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('weeks', 'readwrite');
+    tx.objectStore('weeks').put({ weekLabel, analyzedAt: new Date().toISOString(), ...analysis });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadWeekData(weekLabel) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('weeks', 'readonly');
+    const req = tx.objectStore('weeks').get(weekLabel);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function listAllWeeks() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('weeks', 'readonly');
+    const req = tx.objectStore('weeks').getAllKeys();
+    req.onsuccess = () => resolve(req.result.sort());
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function deleteWeekData(weekLabel) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('weeks', 'readwrite');
+    tx.objectStore('weeks').delete(weekLabel);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   DOCX EXPORT
+   ═══════════════════════════════════════════════ */
+
+async function generateDocx(analysis) {
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, ShadingType } = docx;
+  const chat = analysis.chatDigest || {};
+  const uxEvents = analysis.uxcamEvents || {};
+  const retention = analysis.retention || {};
+  const activeSubs = analysis.activeSubscriptions || {};
+  const mrr = analysis.mrr || {};
+  const actions = analysis.actions || [];
+  const blockers = analysis.blockers || {};
+  const sanityChecks = analysis.sanityChecks || [];
+  const weekLabel = analysis.weekLabel;
+
+  const h = (text, level = HeadingLevel.HEADING_1) => new Paragraph({ text, heading: level, spacing: { before: 400, after: 200 } });
+  const p = (text, opts = {}) => new Paragraph({ children: [new TextRun({ text, size: 22, ...opts })], spacing: { after: 120 } });
+  const bp = (label, value) => new Paragraph({ children: [new TextRun({ text: `${label}: `, bold: true, size: 22 }), new TextRun({ text: String(value ?? '—'), size: 22 })], spacing: { after: 80 } });
+  const bullet = (text) => new Paragraph({ children: [new TextRun({ text, size: 22 })], bullet: { level: 0 }, spacing: { after: 60 } });
+
+  const borderStyle = { style: BorderStyle.SINGLE, size: 1, color: 'cbd5e1' };
+  const borders = { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle };
+
+  const makeTable = (headers, rows) => {
+    const hRow = new TableRow({ children: headers.map(hdr => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: hdr, bold: true, size: 20, color: 'ffffff' })], alignment: AlignmentType.CENTER })], shading: { type: ShadingType.SOLID, color: '1e40af' }, borders, width: { size: Math.floor(9000 / headers.length), type: WidthType.DXA } })) });
+    const dRows = rows.map((row, ri) => new TableRow({ children: row.map(cell => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(cell ?? '—'), size: 20 })], alignment: AlignmentType.CENTER })], shading: ri % 2 === 0 ? {} : { type: ShadingType.SOLID, color: 'f1f5f9' }, borders })) }));
+    return new Table({ rows: [hRow, ...dRows], width: { size: 9000, type: WidthType.DXA } });
+  };
+
+  const sections = [];
+
+  sections.push(h('Executive Summary'));
+  sections.push(p(`This report analyses Sylva's trial-to-subscription conversion funnel for week ${weekLabel}. ${chat.statusCounts?.trial || 0} trial users and ${chat.statusCounts?.active || 0} paid users analysed.`));
+  sections.push(bp('Active Subscriptions (Sylva)', activeSubs.latest?.sylva));
+  sections.push(bp('MRR', mrr.latest?.sylva ? `£${mrr.latest.sylva.toFixed(2)}` : '—'));
+  sections.push(bp('Strongest Predictor', chat.strongestPredictor ? `${chat.strongestPredictor.metric} (${chat.strongestPredictor.ratio}x gap)` : '—'));
+
+  sections.push(h('Trial User Engagement Profile'));
+  sections.push(makeTable(['Segment', 'Count', 'Description'], [
+    ['High-engagement, no convert', chat.trialSegments?.high_engagement_no_convert ?? 0, '5+ sessions, 3+ days active'],
+    ['Moderate, fading', chat.trialSegments?.moderate_fading ?? 0, '2-4 sessions, inactive >3 days'],
+    ['Single session', chat.trialSegments?.single_session ?? 0, 'Only 1 chat session'],
+    ['Active trial', chat.trialSegments?.active_trial ?? 0, 'Chat within last 48h'],
+    ['Expired/lapsed', chat.trialSegments?.expired_lapsed ?? 0, 'Trial ended, no subscription'],
+  ]));
+  sections.push(bp('Median Sessions', chat.trialMetrics?.medianSessions));
+  sections.push(bp('Median Messages/Session', chat.trialMetrics?.medianMessagesPerSession));
+  sections.push(bp('Median Duration', `${chat.trialMetrics?.medianDuration ?? '—'} min`));
+  sections.push(bp('Median Tests Completed', chat.trialMetrics?.medianTestsCompleted));
+
+  sections.push(h('Paid User Success Pattern'));
+  sections.push(bp('Median Sessions', chat.paidMetrics?.medianSessions));
+  sections.push(bp('Median Messages/Session', chat.paidMetrics?.medianMessagesPerSession));
+  sections.push(bp('Median Duration', `${chat.paidMetrics?.medianDuration ?? '—'} min`));
+  sections.push(bp('Median Tests Completed', chat.paidMetrics?.medianTestsCompleted));
+
+  sections.push(h('Engagement Gap Analysis'));
+  const gaps = chat.engagementGaps || {};
+  const gapRows = [];
+  if (gaps.messagesPerSession) gapRows.push(['Messages/Session', gaps.messagesPerSession.trial, gaps.messagesPerSession.paid, gaps.messagesPerSession.ratio ? `${gaps.messagesPerSession.ratio}x` : '—']);
+  if (gaps.duration) gapRows.push(['Duration (min)', gaps.duration.trial, gaps.duration.paid, gaps.duration.ratio ? `${gaps.duration.ratio}x` : '—']);
+  if (gaps.testsCompleted) gapRows.push(['Tests Completed', gaps.testsCompleted.trial, gaps.testsCompleted.paid, gaps.testsCompleted.ratio ? `${gaps.testsCompleted.ratio}x` : '—']);
+  if (gapRows.length > 0) sections.push(makeTable(['Metric', 'Trial', 'Paid', 'Gap'], gapRows));
+  if (chat.strongestPredictor) sections.push(p(`KEY FINDING: ${chat.strongestPredictor.metric} shows the largest gap (${chat.strongestPredictor.ratio}x).`, { bold: true }));
+
+  if (uxEvents.subscriptionFunnel) {
+    sections.push(h('Subscription Sub-Funnel'));
+    sections.push(makeTable(['Step', 'Users', 'Drop Rate', 'Events'], uxEvents.subscriptionFunnel.map(s => [s.step.replace(/_/g, ' '), s.uniqueUsers, s.dropRate !== null ? `${s.dropRate}%` : '—', s.totalEvents])));
+  }
+
+  if (retention.cohorts?.length > 0) {
+    sections.push(h('Retention Cohort Analysis'));
+    sections.push(bp('Total Subscriptions', retention.totalSubscriptions));
+    sections.push(bp('Month 1 Retention', retention.month1Retention ? `${retention.month1Retention}%` : '—'));
+    sections.push(bp('Month 6 Retention', retention.month6Retention ? `${retention.month6Retention}%` : '—'));
+    sections.push(makeTable(['Metric', 'Sylva', 'H&F Median', 'H&F Top 10%'], [['Trial → Paid', '~2.5%', '39.9%', '68.3%'], ['Month 1 Retention', `${retention.month1Retention ?? '—'}%`, '—', '—']]));
+  }
+
+  sections.push(h('Conversion Blockers'));
+  for (const [key, label] of [['valueDelivery','Value Delivery'],['valueAwareness','Value Awareness'],['pricingTiming','Pricing/Timing'],['trialExpiration','Trial Expiration']]) {
+    const items = blockers[key] || [];
+    if (items.length > 0) { sections.push(h(label, HeadingLevel.HEADING_2)); items.forEach(b => { sections.push(bullet(`[${b.severity.toUpperCase()}] ${b.finding}`)); sections.push(p(`  → ${b.implication}`, { italics: true })); }); }
+  }
+
+  sections.push(h('Top Priority Actions'));
+  actions.forEach(a => { sections.push(h(`${a.priority}: ${a.what}`, HeadingLevel.HEADING_2)); sections.push(bp('Why', a.why)); sections.push(bp('Who', a.who)); sections.push(bp('When', a.when)); sections.push(bp('Expected Impact', a.expectedImpact)); });
+
+  sections.push(h('Appendix'));
+  const highEng = (chat.trialProfiles || []).filter(p => p.segment === 'high_engagement_no_convert');
+  if (highEng.length > 0) { sections.push(p('High-engagement non-converting users:')); highEng.slice(0, 20).forEach(u => sections.push(bullet(`${u.userId} — ${u.totalSessions} sessions, ${u.testsCompletedCount} tests`))); }
+  sections.push(h('Sanity Checks', HeadingLevel.HEADING_2));
+  sanityChecks.forEach(c => sections.push(p(`[${c.passed ? 'PASS' : c.passed === false ? 'FAIL' : 'INFO'}] ${c.name}: ${c.detail}`)));
+
+  const doc = new Document({ styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } }, sections: [{ children: sections }] });
+  const blob = await Packer.toBlob(doc);
+  saveAs(blob, `sylva-report-${weekLabel}.docx`);
+}
+
+/* ═══════════════════════════════════════════════
+   REACT COMPONENTS
+   ═══════════════════════════════════════════════ */
+
+const TABS = ['Trial Cohort', 'Engagement Gap', 'Subscription Funnel', 'Retention', 'Actions'];
+
+function MetricCard({ label, value, subtext, color = '#60a5fa' }) {
+  return (
+    <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', minWidth: '160px', flex: 1 }}>
+      <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>{label}</div>
+      <div style={{ fontSize: '32px', fontWeight: 700, color, lineHeight: 1.1 }}>{value ?? '—'}</div>
+      {subtext && <div style={{ color: '#64748b', fontSize: '12px', marginTop: '6px' }}>{subtext}</div>}
+    </div>
+  );
+}
+
+function HBar({ label, value, max, color = '#3b82f6' }) {
+  const pct = max > 0 ? (value / max) * 100 : 0;
+  return (
+    <div style={{ marginBottom: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
+        <span style={{ color: '#cbd5e1' }}>{label}</span><span style={{ color: '#94a3b8' }}>{value}</span>
+      </div>
+      <div style={{ background: '#1e293b', borderRadius: '4px', height: '8px', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(pct, 100)}%`, background: color, height: '100%', borderRadius: '4px', transition: 'width 0.5s' }} />
+      </div>
+    </div>
+  );
+}
+
+function TrialCohortTab({ chat, sortConfig, setSortConfig }) {
+  const segments = chat.trialSegments || {};
+  const totalTrial = chat.statusCounts?.trial || 0;
+  const converted = chat.statusCounts?.active || 0;
+  const totalUsers = totalTrial + converted + (chat.statusCounts?.free || 0) + (chat.statusCounts?.cancelled || 0);
+  const conversionRate = totalUsers > 0 ? ((converted / totalUsers) * 100).toFixed(1) : '—';
+
+  const segmentData = [
+    { label: 'High-engagement, no convert', count: segments.high_engagement_no_convert || 0, color: '#f59e0b' },
+    { label: 'Moderate, fading', count: segments.moderate_fading || 0, color: '#f97316' },
+    { label: 'Single session', count: segments.single_session || 0, color: '#ef4444' },
+    { label: 'Active trial', count: segments.active_trial || 0, color: '#22c55e' },
+    { label: 'Expired/lapsed', count: segments.expired_lapsed || 0, color: '#6366f1' },
+  ];
+
+  const profiles = chat.trialProfiles || [];
+  const sorted = [...profiles].sort((a, b) => {
+    const av = a[sortConfig.key] ?? 0, bv = b[sortConfig.key] ?? 0;
+    return sortConfig.direction === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
+  });
+  const handleSort = (key) => setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' }}>
+        <MetricCard label="Total Trial Users" value={totalTrial} />
+        <MetricCard label="Active Trial (48h)" value={segments.active_trial || 0} color="#22c55e" />
+        <MetricCard label="Lapsed Trial" value={segments.expired_lapsed || 0} color="#ef4444" />
+        <MetricCard label="Converted (Paid)" value={converted} color="#a78bfa" />
+        <MetricCard label="Trial-to-Paid Rate" value={`${conversionRate}%`} color="#f59e0b" />
+      </div>
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Trial User Segments</h3>
+        {segmentData.map(seg => <HBar key={seg.label} label={seg.label} value={seg.count} max={totalTrial} color={seg.color} />)}
+      </div>
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', overflowX: 'auto' }}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Trial Users Detail</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+          <thead><tr style={{ borderBottom: '1px solid #334155' }}>
+            {[{ key: 'userId', label: 'User ID' },{ key: 'segment', label: 'Segment' },{ key: 'totalSessions', label: 'Sessions' },{ key: 'daysActive', label: 'Days Active' },{ key: 'meanCSAT', label: 'CSAT' },{ key: 'totalMessages', label: 'Messages' },{ key: 'testsCompletedCount', label: 'Tests' },{ key: 'pss10Change', label: 'PSS10 Δ' },{ key: 'lastChat', label: 'Last Chat' }].map(col => (
+              <th key={col.key} onClick={() => handleSort(col.key)} style={{ padding: '8px 12px', textAlign: 'left', color: '#94a3b8', cursor: 'pointer', fontWeight: sortConfig.key === col.key ? 700 : 400 }}>
+                {col.label} {sortConfig.key === col.key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}
+              </th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {sorted.slice(0, 100).map((p, i) => (
+              <tr key={p.userId} style={{ borderBottom: '1px solid #1e293b', background: i % 2 === 0 ? 'transparent' : '#0a1628' }}>
+                <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontSize: '11px' }}>{(p.userId || '').substring(0, 12)}...</td>
+                <td style={{ padding: '8px 12px' }}><span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '11px', background: p.segment === 'active_trial' ? '#064e3b' : p.segment === 'expired_lapsed' ? '#4c0519' : '#1e293b', color: p.segment === 'active_trial' ? '#34d399' : p.segment === 'expired_lapsed' ? '#fda4af' : '#94a3b8' }}>{(p.segment || '').replace(/_/g, ' ')}</span></td>
+                <td style={{ padding: '8px 12px' }}>{p.totalSessions}</td>
+                <td style={{ padding: '8px 12px' }}>{p.daysActive}</td>
+                <td style={{ padding: '8px 12px' }}>{p.meanCSAT ?? '—'}</td>
+                <td style={{ padding: '8px 12px' }}>{p.totalMessages}</td>
+                <td style={{ padding: '8px 12px' }}>{p.testsCompletedCount}</td>
+                <td style={{ padding: '8px 12px', color: p.pss10Change < 0 ? '#34d399' : p.pss10Change > 0 ? '#f87171' : '#94a3b8' }}>{p.pss10Change !== null ? p.pss10Change : '—'}</td>
+                <td style={{ padding: '8px 12px', fontSize: '11px' }}>{p.lastChat ? new Date(p.lastChat).toLocaleDateString() : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+function EngagementGapTab({ chat }) {
+  const gaps = chat.engagementGaps || {};
+  const strongest = chat.strongestPredictor;
+  const trial = chat.trialMetrics || {};
+  const paid = chat.paidMetrics || {};
+  const metrics = [
+    { label: 'Median Sessions', trial: trial.medianSessions, paid: paid.medianSessions },
+    { label: 'Messages / Session', trial: gaps.messagesPerSession?.trial, paid: gaps.messagesPerSession?.paid, ratio: gaps.messagesPerSession?.ratio },
+    { label: 'Duration (min)', trial: gaps.duration?.trial, paid: gaps.duration?.paid, ratio: gaps.duration?.ratio },
+    { label: 'CSAT Score', trial: gaps.csat?.trial, paid: gaps.csat?.paid },
+    { label: 'Tests Completed', trial: gaps.testsCompleted?.trial, paid: gaps.testsCompleted?.paid, ratio: gaps.testsCompleted?.ratio, highlight: true },
+    { label: 'PSS10 Change', trial: gaps.pss10Change?.trial, paid: gaps.pss10Change?.paid },
+    { label: 'Days Active', trial: trial.medianDaysActive, paid: paid.medianDaysActive },
+  ];
+  return (
+    <div>
+      {strongest && (
+        <div style={{ background: 'linear-gradient(135deg, #1e1b4b, #172554)', border: '1px solid #3730a3', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
+          <div style={{ fontSize: '12px', color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>Key Insight</div>
+          <div style={{ fontSize: '20px', fontWeight: 600, color: '#f8fafc' }}>Paid users have {strongest.ratio}x more {strongest.metric.toLowerCase()} than trial users</div>
+          <div style={{ color: '#94a3b8', fontSize: '14px', marginTop: '8px' }}>{strongest.metric} appears to be the strongest predictor of conversion.</div>
+        </div>
+      )}
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px' }}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Trial vs Paid Comparison</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+          <thead><tr style={{ borderBottom: '1px solid #334155' }}>
+            <th style={{ padding: '10px 16px', textAlign: 'left', color: '#94a3b8' }}>Metric</th>
+            <th style={{ padding: '10px 16px', textAlign: 'center', color: '#f87171' }}>Trial</th>
+            <th style={{ padding: '10px 16px', textAlign: 'center', color: '#34d399' }}>Paid</th>
+            <th style={{ padding: '10px 16px', textAlign: 'center', color: '#94a3b8' }}>Gap</th>
+          </tr></thead>
+          <tbody>{metrics.map((m, i) => (
+            <tr key={m.label} style={{ borderBottom: '1px solid #1e293b', background: m.highlight ? '#1e1b4b22' : i % 2 === 0 ? 'transparent' : '#0a1628' }}>
+              <td style={{ padding: '10px 16px', fontWeight: m.highlight ? 600 : 400 }}>{m.label}</td>
+              <td style={{ padding: '10px 16px', textAlign: 'center', color: '#f87171' }}>{m.trial ?? '—'}</td>
+              <td style={{ padding: '10px 16px', textAlign: 'center', color: '#34d399' }}>{m.paid ?? '—'}</td>
+              <td style={{ padding: '10px 16px', textAlign: 'center', color: m.ratio && m.ratio > 2 ? '#fbbf24' : '#94a3b8' }}>{m.ratio ? `${m.ratio}x` : '—'}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: 'flex', gap: '16px', marginTop: '24px', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: '300px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px' }}>
+          <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: '#f8fafc' }}>Top Topics (Trial)</h3>
+          {(trial.topTopics || []).slice(0, 8).map(t => <HBar key={t.value} label={t.value} value={t.count} max={trial.topTopics?.[0]?.count || 1} color="#6366f1" />)}
+        </div>
+        <div style={{ flex: 1, minWidth: '300px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px' }}>
+          <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: '#f8fafc' }}>Top Topics (Paid)</h3>
+          {(paid.topTopics || []).slice(0, 8).map(t => <HBar key={t.value} label={t.value} value={t.count} max={paid.topTopics?.[0]?.count || 1} color="#22c55e" />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionFunnelTab({ uxEvents, uxScreens }) {
+  const funnel = uxEvents.subscriptionFunnel || [];
+  const maxUsers = funnel.length > 0 ? funnel[0].uniqueUsers : 1;
+  const screens = uxScreens.targetScreens || {};
+  return (
+    <div>
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
+        <h3 style={{ margin: '0 0 20px', fontSize: '16px', color: '#f8fafc' }}>Subscription Sub-Funnel</h3>
+        {funnel.map((step, i) => {
+          const widthPct = maxUsers > 0 ? Math.max((step.uniqueUsers / maxUsers) * 100, 5) : 5;
+          return (
+            <div key={step.step} style={{ marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '4px' }}>
+                <div style={{ width: '240px', fontSize: '13px', color: '#cbd5e1', textAlign: 'right' }}>{step.step.replace(/_/g, ' ')}</div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: `${widthPct}%`, background: `hsl(${220 + i * 15}, 70%, ${55 - i * 5}%)`, height: '32px', borderRadius: '4px', display: 'flex', alignItems: 'center', paddingLeft: '8px', fontSize: '13px', fontWeight: 600, color: '#fff', minWidth: '40px', transition: 'width 0.5s' }}>{step.uniqueUsers}</div>
+                  {step.dropRate !== null && step.dropRate > 0 && <span style={{ color: '#f87171', fontSize: '12px' }}>-{step.dropRate}%</span>}
+                </div>
+              </div>
+              {i < funnel.length - 1 && <div style={{ width: '240px', textAlign: 'right', marginRight: '12px', display: 'inline-block' }}><span style={{ color: '#475569', fontSize: '18px' }}>↓</span></div>}
+            </div>
+          );
+        })}
+        {funnel.length === 0 && <div style={{ color: '#64748b', fontSize: '14px' }}>No UXCam event data available. Upload UXCam Events CSV.</div>}
+      </div>
+      {uxEvents.fromPageAnalysis && Object.keys(uxEvents.fromPageAnalysis).some(k => Object.keys(uxEvents.fromPageAnalysis[k]).length > 0) && (
+        <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 12px', fontSize: '16px', color: '#f8fafc' }}>Pricing View Sources</h3>
+          {Object.entries(uxEvents.fromPageAnalysis).map(([event, sources]) => Object.keys(sources).length > 0 && (
+            <div key={event} style={{ marginBottom: '12px' }}>
+              <div style={{ color: '#94a3b8', fontSize: '12px', marginBottom: '4px' }}>{event.replace(/_/g, ' ')}</div>
+              {Object.entries(sources).map(([page, count]) => <HBar key={page} label={page} value={count} max={Math.max(...Object.values(sources))} color="#818cf8" />)}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px' }}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Key Screen Metrics</h3>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+          {['/subscribe', '/trial-start', '/chat', '/settings'].map(screen => {
+            const s = screens[screen];
+            return (
+              <div key={screen} style={{ flex: 1, minWidth: '200px', background: '#020617', borderRadius: '8px', padding: '16px', border: '1px solid #1e293b' }}>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: '#e2e8f0', marginBottom: '12px' }}>{screen}</div>
+                {s ? (<>
+                  <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Sessions: <span style={{ color: '#e2e8f0' }}>{s.totalSessions ?? '—'}</span></div>
+                  <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Bounce: <span style={{ color: s.bounceRate > 50 ? '#f87171' : '#e2e8f0' }}>{s.bounceRate ?? '—'}%</span></div>
+                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>Engagement: <span style={{ color: '#e2e8f0' }}>{s.medianEngagementTime ?? '—'}s</span></div>
+                </>) : <div style={{ fontSize: '12px', color: '#475569' }}>No data</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function RetentionTab({ retention, activeSubs, mrr }) {
+  const survivalCurve = retention.survivalCurve || {};
+  const months = Object.keys(survivalCurve).map(Number).sort((a, b) => a - b);
+  const maxMonth = months.length > 0 ? months[months.length - 1] : 12;
+  const cohorts = retention.cohorts || [];
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' }}>
+        <MetricCard label="Active Subscriptions" value={activeSubs.latest?.sylva ?? '—'} color="#a78bfa" />
+        <MetricCard label="MRR" value={mrr.latest?.sylva ? `£${mrr.latest.sylva.toFixed(2)}` : '—'} color="#34d399" />
+        <MetricCard label="Month 1 Retention" value={retention.month1Retention ? `${retention.month1Retention}%` : '—'} color="#60a5fa" />
+        <MetricCard label="Month 6 Retention" value={retention.month6Retention ? `${retention.month6Retention}%` : '—'} color="#f59e0b" />
+      </div>
+      {months.length > 0 && (
+        <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Survival Curve</h3>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', height: '200px', padding: '0 16px' }}>
+            {months.map(m => {
+              const rate = survivalCurve[m]?.rate || 0;
+              return (
+                <div key={m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>{rate}%</div>
+                  <div style={{ width: '100%', maxWidth: '40px', height: `${rate * 2}px`, background: `hsl(${220 + m * 10}, 60%, 50%)`, borderRadius: '4px 4px 0 0' }} />
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>M{m}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {cohorts.length > 0 && (
+        <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', marginBottom: '24px', overflowX: 'auto' }}>
+          <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Cohort Detail</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <thead><tr style={{ borderBottom: '1px solid #334155' }}>
+              <th style={{ padding: '8px 12px', textAlign: 'left', color: '#94a3b8' }}>Cohort</th>
+              <th style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8' }}>Subs</th>
+              {Array.from({ length: Math.min(maxMonth, 12) }, (_, i) => <th key={i + 1} style={{ padding: '8px 12px', textAlign: 'center', color: '#94a3b8' }}>M{i + 1}</th>)}
+            </tr></thead>
+            <tbody>{cohorts.map((c, i) => (
+              <tr key={c.name} style={{ borderBottom: '1px solid #1e293b', background: i % 2 === 0 ? 'transparent' : '#0a1628' }}>
+                <td style={{ padding: '8px 12px' }}>{c.name}</td>
+                <td style={{ padding: '8px 12px', textAlign: 'center' }}>{c.subscriptions}</td>
+                {Array.from({ length: Math.min(maxMonth, 12) }, (_, mi) => {
+                  const val = c.months[mi + 1];
+                  const pct = c.subscriptions > 0 && val !== undefined ? Math.round(val / c.subscriptions * 100) : null;
+                  return <td key={mi + 1} style={{ padding: '8px 12px', textAlign: 'center', color: val !== undefined ? '#e2e8f0' : '#334155' }}>{val !== undefined ? `${val} (${pct}%)` : '—'}</td>;
+                })}
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px' }}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#f8fafc' }}>Benchmark Comparison (RevenueCat 2025)</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+          <thead><tr style={{ borderBottom: '1px solid #334155' }}>
+            <th style={{ padding: '10px 16px', textAlign: 'left', color: '#94a3b8' }}>Metric</th>
+            <th style={{ padding: '10px 16px', textAlign: 'center', color: '#f87171' }}>Sylva</th>
+            <th style={{ padding: '10px 16px', textAlign: 'center', color: '#fbbf24' }}>H&F Median</th>
+            <th style={{ padding: '10px 16px', textAlign: 'center', color: '#34d399' }}>H&F Top 10%</th>
+          </tr></thead>
+          <tbody>
+            <tr style={{ borderBottom: '1px solid #1e293b' }}><td style={{ padding: '10px 16px' }}>Trial → Paid</td><td style={{ padding: '10px 16px', textAlign: 'center', color: '#f87171' }}>~2.5%</td><td style={{ padding: '10px 16px', textAlign: 'center', color: '#fbbf24' }}>39.9%</td><td style={{ padding: '10px 16px', textAlign: 'center', color: '#34d399' }}>68.3%</td></tr>
+            <tr style={{ background: '#0a1628' }}><td style={{ padding: '10px 16px' }}>Month 1 Retention</td><td style={{ padding: '10px 16px', textAlign: 'center', color: '#f87171' }}>{retention.month1Retention ?? '—'}%</td><td style={{ padding: '10px 16px', textAlign: 'center', color: '#fbbf24' }}>—</td><td style={{ padding: '10px 16px', textAlign: 'center', color: '#34d399' }}>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ActionsTab({ actions, blockers }) {
+  const priorityColors = { P0: '#ef4444', P1: '#f59e0b', P2: '#3b82f6' };
+  const blockerCategories = [{ key: 'valueDelivery', label: 'Value Delivery' },{ key: 'valueAwareness', label: 'Value Awareness' },{ key: 'pricingTiming', label: 'Pricing/Timing' },{ key: 'trialExpiration', label: 'Trial Expiration' }];
+  return (
+    <div>
+      <h3 style={{ fontSize: '18px', color: '#f8fafc', marginBottom: '16px' }}>Priority Actions</h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '32px' }}>
+        {actions.map((action, i) => (
+          <div key={i} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+              <span style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: priorityColors[action.priority] || '#475569', color: '#fff' }}>{action.priority}</span>
+              <span style={{ fontSize: '15px', fontWeight: 600, color: '#f8fafc' }}>{action.what}</span>
+            </div>
+            <div style={{ fontSize: '13px', color: '#94a3b8', lineHeight: 1.6 }}>
+              <p style={{ margin: '4px 0' }}><strong style={{ color: '#cbd5e1' }}>Why:</strong> {action.why}</p>
+              <p style={{ margin: '4px 0' }}><strong style={{ color: '#cbd5e1' }}>Who:</strong> {action.who}</p>
+              <p style={{ margin: '4px 0' }}><strong style={{ color: '#cbd5e1' }}>When:</strong> {action.when}</p>
+              <p style={{ margin: '4px 0' }}><strong style={{ color: '#cbd5e1' }}>Expected Impact:</strong> {action.expectedImpact}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <h3 style={{ fontSize: '18px', color: '#f8fafc', marginBottom: '16px' }}>Conversion Blockers</h3>
+      {blockerCategories.map(cat => {
+        const items = blockers[cat.key] || [];
+        if (items.length === 0) return null;
+        return (
+          <div key={cat.key} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '20px', marginBottom: '12px' }}>
+            <h4 style={{ margin: '0 0 12px', fontSize: '14px', color: '#f8fafc' }}>{cat.label}</h4>
+            {items.map((b, i) => (
+              <div key={i} style={{ marginBottom: '8px', paddingLeft: '12px', borderLeft: `3px solid ${b.severity === 'critical' ? '#ef4444' : b.severity === 'high' ? '#f59e0b' : '#3b82f6'}` }}>
+                <div style={{ fontSize: '13px', color: '#e2e8f0' }}>{b.finding}</div>
+                <div style={{ fontSize: '12px', color: '#64748b' }}>{b.implication}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SanityChecksFooter({ checks }) {
+  const [expanded, setExpanded] = React.useState(false);
+  if (!checks || checks.length === 0) return null;
+  const allPassed = checks.every(c => c.passed !== false);
+  return (
+    <div style={{ marginTop: '32px', borderTop: '1px solid #1e293b', paddingTop: '16px' }}>
+      <button onClick={() => setExpanded(!expanded)} style={{ background: 'transparent', border: 'none', color: allPassed ? '#34d399' : '#f59e0b', cursor: 'pointer', fontSize: '13px', fontFamily: 'inherit' }}>
+        {allPassed ? '✓' : '⚠'} Sanity Checks ({checks.filter(c => c.passed).length}/{checks.length} passed) {expanded ? '▲' : '▼'}
+      </button>
+      {expanded && <div style={{ marginTop: '8px' }}>{checks.map((c, i) => (
+        <div key={i} style={{ fontSize: '12px', padding: '4px 0', color: c.passed ? '#34d399' : c.passed === false ? '#f87171' : '#94a3b8' }}>
+          {c.passed ? '✓' : c.passed === false ? '✗' : '?'} {c.name}: {c.detail}{c.note && <span style={{ color: '#64748b' }}> ({c.note})</span>}
+        </div>
+      ))}</div>}
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════
+   MAIN APP
+   ═══════════════════════════════════════════════ */
+
+function App() {
+  const [view, setView] = React.useState('upload'); // 'upload' | 'dashboard'
+  const [files, setFiles] = React.useState([]); // { name, type, rows, headers }
+  const [weekLabel, setWeekLabel] = React.useState(currentWeekLabel());
+  const [analysis, setAnalysis] = React.useState(null);
+  const [status, setStatus] = React.useState('');
+  const [history, setHistory] = React.useState([]);
+  const [activeTab, setActiveTab] = React.useState(0);
+  const [sortConfig, setSortConfig] = React.useState({ key: 'totalSessions', direction: 'desc' });
+  const [dragOver, setDragOver] = React.useState(false);
+  const fileInputRef = React.useRef(null);
+
+  // Load history on mount
+  React.useEffect(() => { listAllWeeks().then(setHistory).catch(() => {}); }, []);
+
+  const handleFiles = async (fileList) => {
+    setStatus('Classifying files...');
+    const newFiles = [];
+    for (const file of fileList) {
+      if (!file.name.toLowerCase().endsWith('.csv')) continue;
+      const text = await file.text();
+      const rows = readCSVText(text);
+      const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+      const classification = classifyCSV(file.name, headers, rows);
+      newFiles.push({ name: file.name, ...classification, rows, headers });
+    }
+    setFiles(prev => {
+      // Deduplicate by name
+      const existing = new Map(prev.map(f => [f.name, f]));
+      for (const f of newFiles) existing.set(f.name, f);
+      return [...existing.values()];
+    });
+    setStatus(`${newFiles.length} file(s) classified`);
+  };
+
+  const handleDrop = (e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); };
+  const handleDragOver = (e) => { e.preventDefault(); setDragOver(true); };
+  const handleDragLeave = () => setDragOver(false);
+  const removeFile = (name) => setFiles(prev => prev.filter(f => f.name !== name));
+
+  const runAnalysis = async () => {
+    setStatus('Running analysis...');
+    try {
+      const dataByType = {};
+      for (const f of files) {
+        if (f.type === 'unknown') continue;
+        if (f.type === 'chatDigest') {
+          // Pick the one with most rows
+          if (!dataByType.chatDigest || f.rowCount > dataByType.chatDigest.rowCount) dataByType.chatDigest = f;
+        } else {
+          dataByType[f.type] = f;
+        }
+      }
+
+      const today = new Date();
+      const chatDigest = dataByType.chatDigest ? analyzeChatDigest(dataByType.chatDigest.rows, today) : { error: 'No chat digest data' };
+      const uxcamEvents = dataByType.uxcamEvent ? analyzeUXCamEvents(dataByType.uxcamEvent.rows) : { error: 'No UXCam event data' };
+      const uxcamUsers = dataByType.uxcamUser ? analyzeUXCamUsers(dataByType.uxcamUser.rows) : { error: 'No UXCam user data' };
+      const uxcamSessions = dataByType.uxcamSession ? analyzeUXCamSessions(dataByType.uxcamSession.rows) : { error: 'No UXCam session data' };
+      const uxcamScreens = dataByType.uxcamScreen ? analyzeUXCamScreens(dataByType.uxcamScreen.rows) : { error: 'No UXCam screen data' };
+      const conversion = dataByType.revenuecatConversion ? analyzeConversion(dataByType.revenuecatConversion.rows) : { error: 'No conversion data' };
+      const retention = dataByType.revenuecatRetention ? analyzeRetention(dataByType.revenuecatRetention.rows) : { error: 'No retention data' };
+      const activeSubscriptions = dataByType.revenuecatActiveSubscriptions ? analyzeActiveSubscriptions(dataByType.revenuecatActiveSubscriptions.rows) : { error: 'No active subs data' };
+      const mrrData = dataByType.revenuecatMRR ? analyzeMRR(dataByType.revenuecatMRR.rows) : { error: 'No MRR data' };
+      const newCustomers = dataByType.revenuecatNewCustomers ? analyzeNewCustomers(dataByType.revenuecatNewCustomers.rows) : { error: 'No new customers data' };
+
+      const blockers = !chatDigest.error ? identifyBlockers(chatDigest, uxcamEvents, uxcamScreens) : {};
+      const actions = !chatDigest.error ? generateActions(blockers, chatDigest, uxcamEvents) : [];
+      const sanityChecks = runSanityChecks(
+        chatDigest.error ? null : chatDigest,
+        uxcamEvents.error ? null : uxcamEvents,
+        uxcamUsers.error ? null : uxcamUsers,
+        retention.error ? null : retention,
+        conversion.error ? null : conversion,
+        activeSubscriptions.error ? null : activeSubscriptions,
+      );
+
+      const result = {
+        weekLabel, analyzedAt: today.toISOString(),
+        chatDigest: chatDigest.error ? { error: chatDigest.error } : chatDigest,
+        uxcamEvents: uxcamEvents.error ? { error: uxcamEvents.error } : uxcamEvents,
+        uxcamUsers: uxcamUsers.error ? { error: uxcamUsers.error } : uxcamUsers,
+        uxcamSessions: uxcamSessions.error ? { error: uxcamSessions.error } : uxcamSessions,
+        uxcamScreens: uxcamScreens.error ? { error: uxcamScreens.error } : uxcamScreens,
+        conversion: conversion.error ? { error: conversion.error } : conversion,
+        retention: retention.error ? { error: retention.error } : retention,
+        activeSubscriptions: activeSubscriptions.error ? { error: activeSubscriptions.error } : activeSubscriptions,
+        mrr: mrrData.error ? { error: mrrData.error } : mrrData,
+        newCustomers: newCustomers.error ? { error: newCustomers.error } : newCustomers,
+        blockers, actions, sanityChecks, benchmarks: BENCHMARKS,
+      };
+
+      setAnalysis(result);
+      await saveWeekData(weekLabel, result);
+      const updatedHistory = await listAllWeeks();
+      setHistory(updatedHistory);
+      setView('dashboard');
+      setStatus(`Analysis complete for ${weekLabel}`);
+    } catch (err) {
+      setStatus(`Error: ${err.message}`);
+      console.error(err);
+    }
+  };
+
+  const loadFromHistory = async (wl) => {
+    setStatus(`Loading ${wl}...`);
+    const data = await loadWeekData(wl);
+    if (data) {
+      setAnalysis(data);
+      setWeekLabel(wl);
+      setView('dashboard');
+      setStatus(`Loaded ${wl}`);
+    } else {
+      setStatus(`No data found for ${wl}`);
+    }
+  };
+
+  const deleteFromHistory = async (wl, e) => {
+    e.stopPropagation();
+    await deleteWeekData(wl);
+    setHistory(await listAllWeeks());
+    setStatus(`Deleted ${wl}`);
+  };
+
+  const exportDashboardHTML = () => {
+    if (!analysis) return;
+    const blob = new Blob([document.documentElement.outerHTML], { type: 'text/html' });
+    saveAs(blob, `sylva-dashboard-${weekLabel}.html`);
+  };
+
+  const exportDocx = async () => {
+    if (!analysis) return;
+    setStatus('Generating Word document...');
+    try {
+      await generateDocx(analysis);
+      setStatus('Word document downloaded');
+    } catch (err) {
+      setStatus(`DOCX error: ${err.message}`);
+      console.error(err);
+    }
+  };
+
+  const exportJSON = () => {
+    if (!analysis) return;
+    const blob = new Blob([JSON.stringify(analysis, null, 2)], { type: 'application/json' });
+    saveAs(blob, `sylva-analysis-${weekLabel}.json`);
+  };
+
+  // UPLOAD VIEW
+  if (view === 'upload') {
+    return (
+      <div style={{ maxWidth: '960px', margin: '0 auto', padding: '24px' }}>
+        <header style={{ marginBottom: '32px', textAlign: 'center' }}>
+          <h1 style={{ fontSize: '28px', fontWeight: 600, color: '#f8fafc' }}>Sylva Weekly Product Report</h1>
+          <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '8px' }}>Trial → Subscription Drop-off Analysis</p>
+        </header>
+
+        <div className={`upload-zone${dragOver ? ' dragover' : ''}`} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onClick={() => fileInputRef.current?.click()}>
+          <h2>Drop CSV files here</h2>
+          <p>or click to browse. Supports: Chat Digest, UXCam (Events/Users/Sessions/Screens), RevenueCat (Conversion/Retention/Active Subs/MRR/New Customers)</p>
+          <input ref={fileInputRef} type="file" multiple accept=".csv" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
+        </div>
+
+        {files.length > 0 && (
+          <div className="file-list">
+            {files.map(f => (
+              <div key={f.name} className="file-chip">
+                <span className="type">{DATA_TYPE_LABELS[f.type] || f.type}</span>
+                <span>{f.name}</span>
+                {f.rowCount !== undefined && <span style={{ color: '#64748b' }}>({f.rowCount} rows)</span>}
+                <span className="remove" onClick={() => removeFile(f.name)}>×</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="controls">
+          <label style={{ color: '#94a3b8', fontSize: '13px' }}>Week:</label>
+          <input className="week-input" value={weekLabel} onChange={e => setWeekLabel(e.target.value)} placeholder="YYYY-WNN" />
+          <button className="btn btn-primary" disabled={files.filter(f => f.type !== 'unknown').length === 0} onClick={runAnalysis}>
+            Analyse {files.filter(f => f.type !== 'unknown').length} file(s)
+          </button>
+        </div>
+
+        {history.length > 0 && (
+          <div style={{ margin: '24px 0' }}>
+            <h3 style={{ color: '#f8fafc', fontSize: '16px', marginBottom: '12px', paddingLeft: '24px' }}>Previous Reports</h3>
+            <div className="history-panel">
+              {history.map(wl => (
+                <div key={wl} className="history-item" onClick={() => loadFromHistory(wl)}>
+                  <span className="week">{wl}</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px' }} onClick={(e) => { e.stopPropagation(); loadFromHistory(wl); }}>Load</button>
+                    <button className="btn" style={{ padding: '4px 12px', fontSize: '12px', background: 'transparent', color: '#64748b', border: '1px solid #334155' }} onClick={(e) => deleteFromHistory(wl, e)}>Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {status && <div className="status-bar"><span className={status.startsWith('Error') ? 'error' : 'success'}>{status}</span></div>}
+      </div>
+    );
+  }
+
+  // DASHBOARD VIEW
+  const chat = analysis?.chatDigest || {};
+  const uxEvents = analysis?.uxcamEvents || {};
+  const uxScreens = analysis?.uxcamScreens || {};
+  const retention = analysis?.retention || {};
+  const activeSubs = analysis?.activeSubscriptions || {};
+  const mrr = analysis?.mrr || {};
+  const actions = analysis?.actions || [];
+  const blockers = analysis?.blockers || {};
+  const sanityChecks = analysis?.sanityChecks || [];
+
+  return (
+    <div style={{ padding: '24px' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h1 style={{ fontSize: '28px', fontWeight: 600, color: '#f8fafc' }}>Sylva Trial → Subscription Analysis</h1>
+          <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>Week: {weekLabel} | Analysed: {analysis?.analyzedAt ? new Date(analysis.analyzedAt).toLocaleDateString() : '—'}</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={() => setView('upload')}>← Upload Data</button>
+          <button className="btn btn-success" onClick={exportDocx}>Export .docx</button>
+          <button className="btn btn-secondary" onClick={exportJSON}>Export JSON</button>
+        </div>
+      </header>
+
+      <nav style={{ display: 'flex', gap: '4px', marginBottom: '24px', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
+        {TABS.map((tab, i) => (
+          <button key={tab} onClick={() => setActiveTab(i)} style={{ padding: '10px 20px', background: activeTab === i ? '#1e293b' : 'transparent', color: activeTab === i ? '#60a5fa' : '#94a3b8', border: 'none', borderBottom: activeTab === i ? '2px solid #60a5fa' : '2px solid transparent', cursor: 'pointer', fontSize: '14px', fontWeight: activeTab === i ? 600 : 400, fontFamily: 'inherit' }}>{tab}</button>
+        ))}
+      </nav>
+
+      {activeTab === 0 && <TrialCohortTab chat={chat} sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+      {activeTab === 1 && <EngagementGapTab chat={chat} />}
+      {activeTab === 2 && <SubscriptionFunnelTab uxEvents={uxEvents} uxScreens={uxScreens} />}
+      {activeTab === 3 && <RetentionTab retention={retention} activeSubs={activeSubs} mrr={mrr} />}
+      {activeTab === 4 && <ActionsTab actions={actions} blockers={blockers} />}
+
+      <SanityChecksFooter checks={sanityChecks} />
+      {status && <div className="status-bar"><span className={status.startsWith('Error') ? 'error' : 'success'}>{status}</span></div>}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
