@@ -7,7 +7,7 @@ export interface OnboardingFunnelResult {
   userDeepestStep: Map<string, number>;
 }
 
-const STEP_EVENTS = ONBOARDING_FUNNEL_STEPS.map(s => s.event);
+const STEP_EVENTS: string[] = ONBOARDING_FUNNEL_STEPS.map(s => s.event);
 
 export function buildOnboardingFunnel(events: UxcamEvent[]): OnboardingFunnelResult {
   // Collect all unique user IDs
