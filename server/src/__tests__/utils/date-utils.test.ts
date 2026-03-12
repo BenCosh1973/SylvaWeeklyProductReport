@@ -40,9 +40,10 @@ describe('Date Utilities', () => {
       const date = new Date('2026-03-30T12:00:00Z');
       const range = getWeekRange(date);
 
-      // Should be Sat Mar 28 → Sat Apr 4
+      // Start = Sat Mar 28 midnight UK (still GMT) = 2026-03-28T00:00:00Z
       expect(range.start.toISOString()).toContain('2026-03-28');
-      expect(range.end.toISOString()).toContain('2026-04-04');
+      // End = Sat Apr 4 midnight UK (now BST, UTC+1) = 2026-04-03T23:00:00Z
+      expect(range.end.toISOString()).toContain('2026-04-03T23:00:00');
     });
 
     it('handles GMT transition correctly (last Sunday of October)', () => {
@@ -51,8 +52,9 @@ describe('Date Utilities', () => {
       const date = new Date('2025-10-27T12:00:00Z');
       const range = getWeekRange(date);
 
-      // Should be Sat Oct 25 → Sat Nov 1
-      expect(range.start.toISOString()).toContain('2025-10-25');
+      // Start = Sat Oct 25 midnight UK (still BST, UTC+1) = 2025-10-24T23:00:00Z
+      expect(range.start.toISOString()).toContain('2025-10-24T23:00:00');
+      // End = Sat Nov 1 midnight UK (now GMT) = 2025-11-01T00:00:00Z
       expect(range.end.toISOString()).toContain('2025-11-01');
     });
   });
