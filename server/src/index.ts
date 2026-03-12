@@ -16,14 +16,42 @@ const projectRoot = join(import.meta.dirname, '..', '..');
 app.use(express.static(projectRoot, { index: 'index.html' }));
 app.use(express.json({ limit: '50mb' }));
 
-// Simple in-memory multipart parsing for CSV uploads
-// Express 5 doesn't bundle body-parser for multipart; we parse raw bodies
-app.use('/api', express.raw({ type: 'multipart/form-data', limit: '100mb' }));
-
 // === State ===
 let lastReport: AnalysisReport | null = null;
 let lastNarrative: NarrativeResult | null = null;
 let lastPrevBaseline: BaselineMetrics | null = null;
+
+// Settings file path
+const SETTINGS_PATH = join(import.meta.dirname, '..', '.settings.json');
+
+interface ServerSettings {
+  anthropicApiKey?: string;
+  supabaseUrl?: string;
+  supabaseServiceKey?: string;
+  port?: number;
+}
+
+function loadSettings(): ServerSettings {
+  try {
+    if (existsSync(SETTINGS_PATH)) {
+      return JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveSettings(settings: ServerSettings): void {
+  writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+}
+
+function applySettings(settings: ServerSettings): void {
+  if (settings.anthropicApiKey) process.env['ANTHROPIC_API_KEY'] = settings.anthropicApiKey;
+  if (settings.supabaseUrl) process.env['SUPABASE_URL'] = settings.supabaseUrl;
+  if (settings.supabaseServiceKey) process.env['SUPABASE_SERVICE_KEY'] = settings.supabaseServiceKey;
+}
+
+// Apply saved settings on startup
+applySettings(loadSettings());
 
 // Temp upload dir
 const UPLOAD_DIR = join(import.meta.dirname, '..', 'uploads');
@@ -32,6 +60,38 @@ if (!existsSync(UPLOAD_DIR)) mkdirSync(UPLOAD_DIR, { recursive: true });
 // === Health ===
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', version: '0.1.0' });
+});
+
+// === Settings ===
+app.get('/api/settings', (_req, res) => {
+  const settings = loadSettings();
+  res.json({
+    anthropicApiKey: settings.anthropicApiKey ? '••••' + settings.anthropicApiKey.slice(-4) : '',
+    supabaseUrl: settings.supabaseUrl ?? '',
+    supabaseServiceKey: settings.supabaseServiceKey ? '••••' + settings.supabaseServiceKey.slice(-4) : '',
+    port: settings.port ?? PORT,
+    hasAnthropicKey: !!settings.anthropicApiKey,
+    hasSupabase: !!(settings.supabaseUrl && settings.supabaseServiceKey),
+  });
+});
+
+app.post('/api/settings', (req, res) => {
+  const body = req.body as ServerSettings;
+  const current = loadSettings();
+  const updated: ServerSettings = { ...current };
+
+  if (body.anthropicApiKey !== undefined && body.anthropicApiKey !== '') {
+    updated.anthropicApiKey = body.anthropicApiKey;
+  }
+  if (body.supabaseUrl !== undefined) updated.supabaseUrl = body.supabaseUrl;
+  if (body.supabaseServiceKey !== undefined && body.supabaseServiceKey !== '') {
+    updated.supabaseServiceKey = body.supabaseServiceKey;
+  }
+  if (body.port !== undefined) updated.port = body.port;
+
+  saveSettings(updated);
+  applySettings(updated);
+  res.json({ success: true });
 });
 
 /**

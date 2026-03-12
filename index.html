@@ -39,6 +39,25 @@ body{background:#020617;color:#e2e8f0;font-family:'IBM Plex Sans',sans-serif;min
 .history-item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:6px;cursor:pointer;font-size:13px}
 .history-item:hover{background:#1e293b}
 .history-item .week{color:#e2e8f0;font-weight:500}.history-item .date{color:#64748b}
+.settings-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:24px;margin-bottom:16px}
+.settings-card h3{color:#f8fafc;font-size:16px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.settings-card .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.settings-card .dot.green{background:#34d399}.settings-card .dot.red{background:#f87171}.settings-card .dot.gray{background:#475569}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;color:#94a3b8;font-size:13px;margin-bottom:6px}
+.form-input{width:100%;background:#020617;border:1px solid #334155;color:#e2e8f0;padding:10px 14px;border-radius:8px;font-size:14px;font-family:inherit}
+.form-input:focus{outline:none;border-color:#3b82f6}
+.form-input::placeholder{color:#475569}
+.narrative-panel{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:24px;margin-bottom:24px}
+.narrative-panel h3{color:#f8fafc;font-size:18px;margin-bottom:16px}
+.narrative-section{margin-bottom:16px}
+.narrative-section h4{color:#60a5fa;font-size:14px;margin-bottom:8px}
+.narrative-section p{color:#cbd5e1;font-size:14px;line-height:1.6}
+.server-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600}
+.server-badge.connected{background:rgba(52,211,153,0.15);color:#34d399}
+.server-badge.disconnected{background:rgba(248,113,113,0.15);color:#f87171}
+.progress-bar{height:4px;background:#1e293b;border-radius:2px;overflow:hidden;margin-top:8px}
+.progress-bar .fill{height:100%;background:#3b82f6;border-radius:2px;transition:width 0.3s}
 </style>
 </head>
 <body>
@@ -1122,9 +1141,177 @@ function SanityChecksFooter({ checks }) {
    MAIN APP
    ═══════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════
+   SETTINGS VIEW
+   ═══════════════════════════════════════════════ */
+
+function SettingsView({ onBack, serverStatus, onServerStatusChange }) {
+  const [anthropicKey, setAnthropicKey] = React.useState('');
+  const [supabaseUrl, setSupabaseUrl] = React.useState('');
+  const [supabaseKey, setSupabaseKey] = React.useState('');
+  const [port, setPort] = React.useState('3001');
+  const [saved, setSaved] = React.useState(false);
+  const [loadedMask, setLoadedMask] = React.useState({});
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    fetch('/api/settings').then(r => r.json()).then(data => {
+      setLoadedMask(data);
+      if (data.supabaseUrl) setSupabaseUrl(data.supabaseUrl);
+      if (data.port) setPort(String(data.port));
+    }).catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true); setError(''); setSaved(false);
+    try {
+      const payload = {};
+      if (anthropicKey) payload.anthropicApiKey = anthropicKey;
+      if (supabaseUrl) payload.supabaseUrl = supabaseUrl;
+      if (supabaseKey) payload.supabaseServiceKey = supabaseKey;
+      if (port) payload.port = parseInt(port, 10);
+
+      const resp = await fetch('/api/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) throw new Error('Failed to save');
+      setSaved(true);
+      setAnthropicKey(''); setSupabaseKey('');
+      // Refresh masked values
+      const updated = await fetch('/api/settings').then(r => r.json());
+      setLoadedMask(updated);
+      onServerStatusChange(true);
+    } catch (e) {
+      setError(e.message);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ maxWidth: '640px', margin: '0 auto', padding: '24px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 600, color: '#f8fafc' }}>Settings</h1>
+        <button className="btn btn-secondary" onClick={onBack}>Back</button>
+      </div>
+
+      <div className="settings-card">
+        <h3><span className={`dot ${loadedMask.hasAnthropicKey ? 'green' : 'gray'}`}></span> Claude AI (Narrative Generation)</h3>
+        <div className="form-group">
+          <label>Anthropic API Key</label>
+          <input className="form-input" type="password" placeholder={loadedMask.anthropicApiKey || 'sk-ant-...'} value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} />
+          {loadedMask.hasAnthropicKey && <div style={{ fontSize: '11px', color: '#34d399', marginTop: '4px' }}>Key configured {loadedMask.anthropicApiKey}</div>}
+        </div>
+      </div>
+
+      <div className="settings-card">
+        <h3><span className={`dot ${loadedMask.hasSupabase ? 'green' : 'gray'}`}></span> Supabase (Week-over-Week Storage)</h3>
+        <div className="form-group">
+          <label>Supabase URL</label>
+          <input className="form-input" type="url" placeholder="https://xxxxx.supabase.co" value={supabaseUrl} onChange={e => setSupabaseUrl(e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label>Supabase Service Key</label>
+          <input className="form-input" type="password" placeholder={loadedMask.supabaseServiceKey || 'eyJ...'} value={supabaseKey} onChange={e => setSupabaseKey(e.target.value)} />
+          {loadedMask.hasSupabase && <div style={{ fontSize: '11px', color: '#34d399', marginTop: '4px' }}>Configured {loadedMask.supabaseServiceKey}</div>}
+        </div>
+      </div>
+
+      <div className="settings-card">
+        <h3><span className="dot gray"></span> Server</h3>
+        <div className="form-group">
+          <label>Port (requires restart)</label>
+          <input className="form-input" type="number" value={port} onChange={e => setPort(e.target.value)} />
+        </div>
+      </div>
+
+      {error && <div style={{ color: '#f87171', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
+      {saved && <div style={{ color: '#34d399', fontSize: '13px', marginBottom: '12px' }}>Settings saved successfully.</div>}
+      <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ width: '100%' }}>
+        {saving ? 'Saving...' : 'Save Settings'}
+      </button>
+
+      <div style={{ marginTop: '32px', padding: '16px', background: '#0f172a', borderRadius: '8px', border: '1px solid #1e293b' }}>
+        <h4 style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '8px' }}>Supabase Setup SQL</h4>
+        <pre style={{ color: '#64748b', fontSize: '12px', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{`CREATE TABLE IF NOT EXISTS weekly_baselines (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  week_ending text UNIQUE NOT NULL,
+  data jsonb NOT NULL,
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_baselines_week
+  ON weekly_baselines(week_ending);`}</pre>
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════
+   NARRATIVE PANEL
+   ═══════════════════════════════════════════════ */
+
+function NarrativePanel({ narrative, onGenerate, generating, hasApiKey }) {
+  if (!narrative && !hasApiKey) {
+    return (
+      <div className="narrative-panel" style={{ borderColor: '#334155' }}>
+        <h3>AI Narrative</h3>
+        <p style={{ color: '#64748b', fontSize: '13px' }}>Configure your Anthropic API key in Settings to generate AI-powered executive summaries.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="narrative-panel">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <h3 style={{ margin: 0 }}>AI Narrative</h3>
+        <button className="btn btn-primary" onClick={onGenerate} disabled={generating} style={{ padding: '6px 16px', fontSize: '13px' }}>
+          {generating ? 'Generating...' : narrative ? 'Regenerate' : 'Generate Narrative'}
+        </button>
+      </div>
+      {generating && (
+        <div className="progress-bar"><div className="fill" style={{ width: '60%', animation: 'pulse 1.5s ease-in-out infinite' }}></div></div>
+      )}
+      {narrative && (
+        <div>
+          {narrative.executiveSummary && (
+            <div className="narrative-section">
+              <h4>Executive Summary</h4>
+              {narrative.executiveSummary.split('\n').filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
+            </div>
+          )}
+          {narrative.weekOverWeekChanges && (
+            <div className="narrative-section">
+              <h4>Week-over-Week Changes</h4>
+              {narrative.weekOverWeekChanges.split('\n').filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
+            </div>
+          )}
+          {narrative.topInsights && (
+            <div className="narrative-section">
+              <h4>Top 3 Insights</h4>
+              {narrative.topInsights.split('\n').filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
+            </div>
+          )}
+          {narrative.recommendations && (
+            <div className="narrative-section">
+              <h4>Recommendations</h4>
+              {narrative.recommendations.split('\n').filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════
+   MAIN APP
+   ═══════════════════════════════════════════════ */
+
 function App() {
-  const [view, setView] = React.useState('upload'); // 'upload' | 'dashboard'
-  const [files, setFiles] = React.useState([]); // { name, type, rows, headers }
+  const [view, setView] = React.useState('upload'); // 'upload' | 'dashboard' | 'settings'
+  const [files, setFiles] = React.useState([]); // { name, type, rows, headers, rawText }
   const [weekLabel, setWeekLabel] = React.useState(currentWeekLabel());
   const [analysis, setAnalysis] = React.useState(null);
   const [status, setStatus] = React.useState('');
@@ -1133,9 +1320,22 @@ function App() {
   const [sortConfig, setSortConfig] = React.useState({ key: 'totalSessions', direction: 'desc' });
   const [dragOver, setDragOver] = React.useState(false);
   const fileInputRef = React.useRef(null);
+  const [serverConnected, setServerConnected] = React.useState(false);
+  const [narrative, setNarrative] = React.useState(null);
+  const [generatingNarrative, setGeneratingNarrative] = React.useState(false);
+  const [hasApiKey, setHasApiKey] = React.useState(false);
+  const [analysing, setAnalysing] = React.useState(false);
 
-  // Load history on mount
-  React.useEffect(() => { listAllWeeks().then(setHistory).catch(() => {}); }, []);
+  // Check server + load history on mount
+  React.useEffect(() => {
+    fetch('/api/health').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && d.status === 'ok') setServerConnected(true);
+    }).catch(() => {});
+    fetch('/api/settings').then(r => r.json()).then(d => {
+      setHasApiKey(!!d.hasAnthropicKey);
+    }).catch(() => {});
+    listAllWeeks().then(setHistory).catch(() => {});
+  }, []);
 
   const handleFiles = async (fileList) => {
     setStatus('Classifying files...');
@@ -1146,10 +1346,9 @@ function App() {
       const rows = readCSVText(text);
       const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
       const classification = classifyCSV(file.name, headers, rows);
-      newFiles.push({ name: file.name, ...classification, rows, headers });
+      newFiles.push({ name: file.name, ...classification, rows, headers, rawText: text });
     }
     setFiles(prev => {
-      // Deduplicate by name
       const existing = new Map(prev.map(f => [f.name, f]));
       for (const f of newFiles) existing.set(f.name, f);
       return [...existing.values()];
@@ -1164,12 +1363,37 @@ function App() {
 
   const runAnalysis = async () => {
     setStatus('Running analysis...');
+    setAnalysing(true);
+    setNarrative(null);
     try {
+      // Try server-side analysis first
+      if (serverConnected) {
+        const payload = {
+          weekLabel,
+          files: files.filter(f => f.type !== 'unknown').map(f => ({ name: f.name, content: f.rawText })),
+        };
+        const resp = await fetch('/api/analyse', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setAnalysis(data.report);
+          await saveWeekData(weekLabel, data.report);
+          setHistory(await listAllWeeks());
+          setView('dashboard');
+          setStatus(`Analysis complete (server) for ${weekLabel}`);
+          setAnalysing(false);
+          return;
+        }
+        setStatus('Server analysis failed, falling back to client-side...');
+      }
+
+      // Fallback: client-side analysis
       const dataByType = {};
       for (const f of files) {
         if (f.type === 'unknown') continue;
         if (f.type === 'chatDigest') {
-          // Pick the one with most rows
           if (!dataByType.chatDigest || f.rowCount > dataByType.chatDigest.rowCount) dataByType.chatDigest = f;
         } else {
           dataByType[f.type] = f;
@@ -1216,13 +1440,14 @@ function App() {
 
       setAnalysis(result);
       await saveWeekData(weekLabel, result);
-      const updatedHistory = await listAllWeeks();
-      setHistory(updatedHistory);
+      setHistory(await listAllWeeks());
       setView('dashboard');
-      setStatus(`Analysis complete for ${weekLabel}`);
+      setStatus(`Analysis complete (client) for ${weekLabel}`);
     } catch (err) {
       setStatus(`Error: ${err.message}`);
       console.error(err);
+    } finally {
+      setAnalysing(false);
     }
   };
 
@@ -1232,6 +1457,7 @@ function App() {
     if (data) {
       setAnalysis(data);
       setWeekLabel(wl);
+      setNarrative(null);
       setView('dashboard');
       setStatus(`Loaded ${wl}`);
     } else {
@@ -1246,13 +1472,43 @@ function App() {
     setStatus(`Deleted ${wl}`);
   };
 
-  const exportDashboardHTML = () => {
-    if (!analysis) return;
-    const blob = new Blob([document.documentElement.outerHTML], { type: 'text/html' });
-    saveAs(blob, `sylva-dashboard-${weekLabel}.html`);
+  const handleGenerateNarrative = async () => {
+    setGeneratingNarrative(true);
+    setStatus('Generating AI narrative...');
+    try {
+      const resp = await fetch('/api/narrative', { method: 'POST' });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.error || 'Failed to generate narrative');
+      }
+      const data = await resp.json();
+      setNarrative(data.narrative);
+      setStatus('Narrative generated');
+    } catch (err) {
+      setStatus(`Narrative error: ${err.message}`);
+    } finally {
+      setGeneratingNarrative(false);
+    }
+  };
+
+  const downloadServerDocx = async () => {
+    setStatus('Downloading Word report from server...');
+    try {
+      const resp = await fetch('/api/report.docx');
+      if (!resp.ok) throw new Error('Server DOCX generation failed');
+      const blob = await resp.blob();
+      saveAs(blob, `sylva-report-${weekLabel}.docx`);
+      setStatus('Word report downloaded');
+    } catch (err) {
+      setStatus(`Download error: ${err.message}`);
+    }
   };
 
   const exportDocx = async () => {
+    // Prefer server-side (includes narrative) if connected
+    if (serverConnected) {
+      return downloadServerDocx();
+    }
     if (!analysis) return;
     setStatus('Generating Word document...');
     try {
@@ -1270,13 +1526,26 @@ function App() {
     saveAs(blob, `sylva-analysis-${weekLabel}.json`);
   };
 
+  // SETTINGS VIEW
+  if (view === 'settings') {
+    return <SettingsView onBack={() => setView('upload')} serverStatus={serverConnected} onServerStatusChange={(v) => { setServerConnected(v); fetch('/api/settings').then(r=>r.json()).then(d=>setHasApiKey(!!d.hasAnthropicKey)).catch(()=>{}); }} />;
+  }
+
   // UPLOAD VIEW
   if (view === 'upload') {
     return (
       <div style={{ maxWidth: '960px', margin: '0 auto', padding: '24px' }}>
         <header style={{ marginBottom: '32px', textAlign: 'center' }}>
-          <h1 style={{ fontSize: '28px', fontWeight: 600, color: '#f8fafc' }}>Sylva Weekly Product Report</h1>
-          <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '8px' }}>Trial → Subscription Drop-off Analysis</p>
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+            <h1 style={{ fontSize: '28px', fontWeight: 600, color: '#f8fafc' }}>Sylva Weekly Product Report</h1>
+          </div>
+          <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>Trial  Subscription Drop-off Analysis</p>
+          <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'center', gap: '8px' }}>
+            <span className={`server-badge ${serverConnected ? 'connected' : 'disconnected'}`}>
+              {serverConnected ? 'Server Connected' : 'Server Offline (Client Mode)'}
+            </span>
+            <button className="btn btn-secondary" style={{ padding: '4px 14px', fontSize: '12px' }} onClick={() => setView('settings')}>Settings</button>
+          </div>
         </header>
 
         <div className={`upload-zone${dragOver ? ' dragover' : ''}`} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onClick={() => fileInputRef.current?.click()}>
@@ -1301,10 +1570,11 @@ function App() {
         <div className="controls">
           <label style={{ color: '#94a3b8', fontSize: '13px' }}>Week:</label>
           <input className="week-input" value={weekLabel} onChange={e => setWeekLabel(e.target.value)} placeholder="YYYY-WNN" />
-          <button className="btn btn-primary" disabled={files.filter(f => f.type !== 'unknown').length === 0} onClick={runAnalysis}>
-            Analyse {files.filter(f => f.type !== 'unknown').length} file(s)
+          <button className="btn btn-primary" disabled={files.filter(f => f.type !== 'unknown').length === 0 || analysing} onClick={runAnalysis}>
+            {analysing ? 'Analysing...' : `Analyse ${files.filter(f => f.type !== 'unknown').length} file(s)`}
           </button>
         </div>
+        {analysing && <div className="progress-bar" style={{ margin: '0 24px' }}><div className="fill" style={{ width: '70%', animation: 'pulse 1.5s ease-in-out infinite' }}></div></div>}
 
         {history.length > 0 && (
           <div style={{ margin: '24px 0' }}>
@@ -1343,15 +1613,23 @@ function App() {
     <div style={{ padding: '24px' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '28px', fontWeight: 600, color: '#f8fafc' }}>Sylva Trial → Subscription Analysis</h1>
-          <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>Week: {weekLabel} | Analysed: {analysis?.analyzedAt ? new Date(analysis.analyzedAt).toLocaleDateString() : '—'}</p>
+          <h1 style={{ fontSize: '28px', fontWeight: 600, color: '#f8fafc' }}>Sylva Trial  Subscription Analysis</h1>
+          <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>
+            Week: {weekLabel} | Analysed: {analysis?.analyzedAt ? new Date(analysis.analyzedAt).toLocaleDateString() : '—'}
+            {serverConnected && <span className="server-badge connected" style={{ marginLeft: '8px' }}>Server</span>}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button className="btn btn-secondary" onClick={() => setView('upload')}>← Upload Data</button>
-          <button className="btn btn-success" onClick={exportDocx}>Export .docx</button>
+          <button className="btn btn-secondary" onClick={() => setView('upload')}>Upload Data</button>
+          <button className="btn btn-success" onClick={exportDocx}>Download .docx</button>
           <button className="btn btn-secondary" onClick={exportJSON}>Export JSON</button>
+          <button className="btn btn-secondary" onClick={() => setView('settings')}>Settings</button>
         </div>
       </header>
+
+      {serverConnected && (
+        <NarrativePanel narrative={narrative} onGenerate={handleGenerateNarrative} generating={generatingNarrative} hasApiKey={hasApiKey} />
+      )}
 
       <nav style={{ display: 'flex', gap: '4px', marginBottom: '24px', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
         {TABS.map((tab, i) => (
